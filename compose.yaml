@@ -1,17 +1,36 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # 非rootユーザをホストUID/GIDで作る(.env は ./init.sh が生成)
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1001}
     environment:
-      # SSH接続だとホスト側の $DISPLAY は空なので、デスクトップの :0 にフォールバック。
-      # ローカルで動かす場合は既存の $DISPLAY がそのまま使われる。
+      # SSH接続だとホスト側の $DISPLAY は空なので .env の検出値を使う。
       DISPLAY: ${DISPLAY:-:0}
       XAUTHORITY: /tmp/.Xauthority
+    # Steam Linux Runtime(pressure-vessel)が user namespace を張るために必要。
+    # ホスト側で kernel.apparmor_restrict_unprivileged_userns=0 も必須(./init.sh が確認)。
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    # GPU(描画)を渡す。
+    devices:
+      - /dev/dri:/dev/dri
+    # /dev/dri の render/video グループに非rootユーザを参加させる(.env に GID 記録)。
+    group_add:
+      - "${RENDER_GID:-110}"
+      - "${VIDEO_GID:-44}"
     volumes:
       # X11 の Unix ソケット
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
       # 稼働中の Xorg が実際に使っている認証クッキー(gdm)。
-      # ~/.Xauthority ではなくこちらが本物。HOST_UID は `id -u` の値(.env参照)。
       - /run/user/${HOST_UID:-1000}/gdm/Xauthority:/tmp/.Xauthority:ro
       # Resonite 本体(ホストのSteam版)を read-only でマウント。
-      # RESONITE_DIR は ./init.sh が .env に書き出す。
       - ${RESONITE_DIR:?run ./init.sh first}:/resonite:ro
+      # Proton / runtime / WINEPREFIX を永続化(HOME 丸ごと)。
+      - resonite-data:/home/resonite
+
+volumes:
+  resonite-data:

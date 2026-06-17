@@ -29,11 +29,20 @@ detect_display() {
 
 DISPLAY_DETECTED="$(detect_display)"
 
+# /dev/dri (GPU) の render/video グループ GID。非rootユーザに group_add する。
+RENDER_GID="$(getent group render | cut -d: -f3)"
+VIDEO_GID="$(getent group video  | cut -d: -f3)"
+[ -n "$RENDER_GID" ] || RENDER_GID="$(stat -c '%g' /dev/dri/renderD128 2>/dev/null || echo 110)"
+[ -n "$VIDEO_GID" ]  || VIDEO_GID="$(stat -c '%g' /dev/dri/card0      2>/dev/null || echo 44)"
+
 {
   printf 'HOST_UID=%s\n' "$(id -u)"
   printf 'HOST_GID=%s\n' "$(id -g)"
   # X11 出力先ディスプレイ(SSH からでも検出)
   printf 'DISPLAY=%s\n' "$DISPLAY_DETECTED"
+  # /dev/dri アクセス用の補助グループ GID
+  printf 'RENDER_GID=%s\n' "$RENDER_GID"
+  printf 'VIDEO_GID=%s\n' "$VIDEO_GID"
   # bind mount(ro) する Resonite の実体パス
   printf 'RESONITE_DIR=%s\n' "$RESONITE_DIR"
 } > .env
@@ -44,4 +53,14 @@ cat .env
 if [ ! -e "$RESONITE_DIR/Resonite.exe" ]; then
   echo "warning: $RESONITE_DIR/Resonite.exe が見つかりません。" \
        "RESONITE_DIR=... ./init.sh で場所を指定できます。" >&2
+fi
+
+# Steam Linux Runtime(pressure-vessel)は unprivileged user namespace を使う。
+# Ubuntu 24.04 は既定でこれを AppArmor で制限しているので 0 に下げる必要がある。
+# (コンテナ内からは設定できない=ホスト側で設定する)
+USERNS_KEY=kernel.apparmor_restrict_unprivileged_userns
+if [ "$(sysctl -n "$USERNS_KEY" 2>/dev/null || echo 0)" != "0" ]; then
+  echo "warning: $USERNS_KEY が 0 ではありません。Resonite(pressure-vessel)が起動できません。" >&2
+  echo "  一時的に設定:  sudo sysctl $USERNS_KEY=0" >&2
+  echo "  永続化:        echo '$USERNS_KEY=0' | sudo tee /etc/sysctl.d/99-resonite-userns.conf && sudo sysctl --system" >&2
 fi
