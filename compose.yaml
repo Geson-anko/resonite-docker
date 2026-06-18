@@ -6,16 +6,28 @@ services:
         # 非rootユーザをホストUID/GIDで作る(.env は ./init.sh が生成)
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1001}
+    # NVIDIA ドライバ(ホストと同一バージョン)を nvidia-container-toolkit が注入する。
+    runtime: nvidia
     environment:
       # SSH接続だとホスト側の $DISPLAY は空なので .env の検出値を使う。
       DISPLAY: ${DISPLAY:-:0}
       XAUTHORITY: /tmp/.Xauthority
+      # 描画に使う GPU。モニタ接続側(.env の UUID)を指定。未検出なら all。
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_GPU_UUID:-all}
+      # GL/Vulkan/表示まで使うので全capabilityを有効化(既定はutility,computeのみ)。
+      NVIDIA_DRIVER_CAPABILITIES: all
     # Steam Linux Runtime(pressure-vessel)が user namespace を張るために必要。
     # ホスト側で kernel.apparmor_restrict_unprivileged_userns=0 も必須(./init.sh が確認)。
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
-    # GPU(描画)を渡す。
+    # Resonite はエンジン↔ResoBoot↔Unityレンダラ間の通信を共有メモリ
+    # (Cloudtoid.Interprocess, /dev/shm 上の memory-mapped file)で行う。
+    # Docker 既定の /dev/shm=64MB では足りず IPC が確立できない
+    # (Bootstrapper messaging timeout)。テクスチャ/メッシュ転送も載るので広めに。
+    shm_size: "2gb"
+    # GPU(描画)を渡す。NVIDIAのデバイスは toolkit が注入するが、X への
+    # DRI3 present 用に /dev/dri も渡しておく。
     devices:
       - /dev/dri:/dev/dri
     # /dev/dri の render/video グループに非rootユーザを参加させる(.env に GID 記録)。
@@ -31,6 +43,14 @@ services:
       - ${RESONITE_DIR:?run ./init.sh first}:/resonite:ro
       # Proton / runtime / WINEPREFIX を永続化(HOME 丸ごと)。
       - resonite-data:/home/resonite
+      # Resonite 本体の書き込み可能コピー。HOME(=volume mount)配下に置くと、
+      # umu が install の親マウント(/home/resonite)を gamedrive(S:)にしてしまい、
+      # CWD の現在ドライブが S: になって絶対パス(/dev/shm, レンダラのパス等)が
+      # ドライブ相対で誤解決される。HOME の外(/opt)に専用 volume で置けば
+      # install の親はマウントで無くなり、CWD が Z:(→/)で解決されてホストと
+      # 同じ正常動作になる。
+      - resonite-app:/opt/resonite
 
 volumes:
   resonite-data:
+  resonite-app:

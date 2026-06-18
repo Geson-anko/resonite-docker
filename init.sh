@@ -29,6 +29,24 @@ detect_display() {
 
 DISPLAY_DETECTED="$(detect_display)"
 
+# モニタが接続されている GPU を特定し、その UUID をコンテナへ渡す。
+# マルチGPU環境では、表示出力に使う GPU で描画させないと PRIME コピーが要る/映らない。
+# connected な DRM コネクタ -> PCI -> nvidia-smi の UUID と突き合わせる。
+detect_display_gpu() {
+  command -v nvidia-smi >/dev/null 2>&1 || return
+  for s in /sys/class/drm/card*-*/status; do
+    [ "$(cat "$s" 2>/dev/null)" = connected ] || continue
+    card="$(basename "$(dirname "$s")" | sed 's/-.*//')"
+    pci="$(basename "$(readlink -f "/sys/class/drm/$card/device")" 2>/dev/null)"  # 0000:0f:00.0
+    short="${pci#0000:}"  # 0f:00.0
+    uuid="$(nvidia-smi --query-gpu=gpu_bus_id,uuid --format=csv,noheader 2>/dev/null \
+            | awk -F', *' -v b="$short" 'BEGIN{b=toupper(b)} toupper($1) ~ b {print $2; exit}')"
+    [ -n "$uuid" ] && { printf '%s' "$uuid"; return; }
+  done
+}
+
+GPU_UUID="$(detect_display_gpu)"
+
 # /dev/dri (GPU) の render/video グループ GID。非rootユーザに group_add する。
 RENDER_GID="$(getent group render | cut -d: -f3)"
 VIDEO_GID="$(getent group video  | cut -d: -f3)"
@@ -43,6 +61,8 @@ VIDEO_GID="$(getent group video  | cut -d: -f3)"
   # /dev/dri アクセス用の補助グループ GID
   printf 'RENDER_GID=%s\n' "$RENDER_GID"
   printf 'VIDEO_GID=%s\n' "$VIDEO_GID"
+  # 描画に使う GPU(モニタ接続側)。空ならコンテナ側で all にフォールバック。
+  printf 'NVIDIA_GPU_UUID=%s\n' "$GPU_UUID"
   # bind mount(ro) する Resonite の実体パス
   printf 'RESONITE_DIR=%s\n' "$RESONITE_DIR"
 } > .env
