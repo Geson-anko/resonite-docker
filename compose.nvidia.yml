@@ -1,0 +1,16 @@
+# NVIDIA GPU 用オーバーレイ。run.sh が NVIDIA を検出したとき base に重ねる:
+#   docker compose -f compose.yaml -f compose.nvidia.yml up --build
+# ドライバ(libGLX_nvidia / Vulkan ICD)は nvidia-container-toolkit がホストから
+# 注入するので、イメージ内の Mesa は使われない。
+services:
+  app:
+    build:
+      args:
+        GPU: nvidia          # Mesa を入れない最小イメージでビルド
+    # ホストと同一バージョンの NVIDIA ドライバを toolkit が注入する。
+    runtime: nvidia
+    environment:
+      # 描画に使う GPU。モニタ接続側(.env の UUID)。未検出なら all。
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_GPU_UUID:-all}
+      # GL/Vulkan/表示まで使うので全capabilityを有効化(既定はutility,computeのみ)。
+      NVIDIA_DRIVER_CAPABILITIES: all

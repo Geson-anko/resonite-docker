@@ -1,33 +1,38 @@
+# Resonite をコンテナ内で起動し、ホストの X11 デスクトップへ描画する基本構成。
+# GPU ベンダー固有の設定は持たない(共通部分のみ)。実際の起動は run.sh が
+# GPU を検出して compose.nvidia.yml / compose.amd.yml を重ねて行う:
+#   docker compose -f compose.yaml -f compose.nvidia.yml up --build   # NVIDIA
+#   docker compose -f compose.yaml -f compose.amd.yml    up --build   # AMD
 services:
   app:
     build:
       context: .
       args:
-        # 非rootユーザをホストUID/GIDで作る(.env は ./init.sh が生成)
+        # 非rootユーザをホストUID/GIDで作る(.env は ./init.sh が生成)。
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1001}
-    # NVIDIA ドライバ(ホストと同一バージョン)を nvidia-container-toolkit が注入する。
-    runtime: nvidia
     environment:
       # SSH接続だとホスト側の $DISPLAY は空なので .env の検出値を使う。
       DISPLAY: ${DISPLAY:-:0}
       XAUTHORITY: /tmp/.Xauthority
-      # 描画に使う GPU。モニタ接続側(.env の UUID)を指定。未検出なら all。
-      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_GPU_UUID:-all}
-      # GL/Vulkan/表示まで使うので全capabilityを有効化(既定はutility,computeのみ)。
-      NVIDIA_DRIVER_CAPABILITIES: all
     # Steam Linux Runtime(pressure-vessel)が user namespace を張るために必要。
     # ホスト側で kernel.apparmor_restrict_unprivileged_userns=0 も必須(./init.sh が確認)。
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
-    # Resonite はエンジン↔ResoBoot↔Unityレンダラ間の通信を共有メモリ
-    # (Cloudtoid.Interprocess, /dev/shm 上の memory-mapped file)で行う。
-    # Docker 既定の /dev/shm=64MB では足りず IPC が確立できない
-    # (Bootstrapper messaging timeout)。テクスチャ/メッシュ転送も載るので広めに。
-    shm_size: "2gb"
-    # GPU(描画)を渡す。NVIDIAのデバイスは toolkit が注入するが、X への
-    # DRI3 present 用に /dev/dri も渡しておく。
+    # ホストの X サーバへ描画するため IPC 名前空間をホストと共有する。
+    # X の MIT-SHM 拡張は SysV 共有メモリを X クライアント(コンテナ内のエンジン/Wine)と
+    # X サーバ(ホスト)で共有するが、Docker 既定は IPC 名前空間を分離するため、コンテナの
+    # shm セグメントをホストの X サーバがアタッチできず X_ShmPutImage が BadValue で失敗する。
+    # Xlib の既定エラーハンドラは時に exit() を呼ぶので、実行ごとにクラッシュ/ハング/
+    # たまに成功とブレる。ipc: host で SysV shm を共有すると解消する。
+    # 併せて Resonite のエンジン↔ResoBoot↔Unityレンダラ間 IPC(Cloudtoid.Interprocess,
+    # /dev/shm 上の memory-mapped file)も、ホストの広い /dev/shm(31GB)を使えるので
+    # Docker 既定の 64MB 不足(Bootstrapper messaging timeout)も同時に回避できる。
+    # ※ ipc: host とは shm_size を併用できないため shm_size は指定しない。
+    ipc: host
+    # GPU(描画)を渡す。NVIDIA のデバイスは toolkit が注入するが、X への
+    # DRI3 present 用に /dev/dri も渡す。AMD は Mesa がこの /dev/dri を直接使う。
     devices:
       - /dev/dri:/dev/dri
     # /dev/dri の render/video グループに非rootユーザを参加させる(.env に GID 記録)。
@@ -41,16 +46,21 @@ services:
       - /run/user/${HOST_UID:-1000}/gdm/Xauthority:/tmp/.Xauthority:ro
       # Resonite 本体(ホストのSteam版)を read-only でマウント。
       - ${RESONITE_DIR:?run ./init.sh first}:/resonite:ro
-      # Proton / runtime / WINEPREFIX を永続化(HOME 丸ごと)。
-      - resonite-data:/home/resonite
-      # Resonite 本体の書き込み可能コピー。HOME(=volume mount)配下に置くと、
-      # umu が install の親マウント(/home/resonite)を gamedrive(S:)にしてしまい、
-      # CWD の現在ドライブが S: になって絶対パス(/dev/shm, レンダラのパス等)が
-      # ドライブ相対で誤解決される。HOME の外(/opt)に専用 volume で置けば
-      # install の親はマウントで無くなり、CWD が Z:(→/)で解決されてホストと
-      # 同じ正常動作になる。
+      # --- 永続化(HOME 全体ではなく必要なものだけを named volume にする) ---
+      # Resonite 本体の書き込み可能コピー。HOME(=volume mount)配下に置くと umu が
+      # install の親マウントを gamedrive(S:)にして CWD の現在ドライブが S: になり、
+      # 絶対パス(/dev/shm 等)がドライブ相対で誤解決される。HOME 外(/opt)の専用
+      # volume に置けば親はマウントで無くなり CWD が Z:(→/)で解決され正常動作する。
       - resonite-app:/opt/resonite
+      # umu/Proton/Steam Linux Runtime + Resonite ユーザデータ(login/設定)。
+      - resonite-share:/home/resonite/.local/share
+      # Resonite アセットキャッシュ + シェーダキャッシュ(再ダウンロード回避)。
+      - resonite-cache:/home/resonite/.cache
+      # Wine プレフィックス(WINEPREFIX)。
+      - resonite-prefix:/home/resonite/prefix
 
 volumes:
-  resonite-data:
   resonite-app:
+  resonite-share:
+  resonite-cache:
+  resonite-prefix:

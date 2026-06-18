@@ -20,14 +20,27 @@ RUN apt-get update \
       x11-apps \
  && rm -rf /var/lib/apt/lists/*
 
-# GPU(NVIDIA)描画用のローダ群。実体のNVIDIAドライバ(libGLX_nvidia / Vulkan ICD)は
-# nvidia-container-toolkit がホストから注入するので、ここでは GLVND / Vulkan の
-# ローダ(32/64bit)と確認ツール(vulkaninfo)だけ入れる。Mesa は不要。
+# 描画に使う GPU ベンダー。AMD のときだけ Mesa をイメージに同梱する。
+# run.sh が検出し compose.{nvidia,amd}.yml の build arg 経由で渡す(既定 nvidia)。
+ARG GPU=nvidia
+
+# GPU 描画用のユーザ空間。
+#  - NVIDIA: 実体のドライバ(libGLX_nvidia / Vulkan ICD)は nvidia-container-toolkit が
+#            ホストから注入するので、GLVND/Vulkan のローダ(32/64bit)だけ入れる。
+#            Mesa の Vulkan ICD は入れない(最小・余計なICDで混乱させない)。
+#  - AMD:    ユーザ空間ドライバ(Mesa)は注入されないのでイメージに同梱する
+#            (libglx-mesa0/libgl1-mesa-dri=GL、mesa-vulkan-drivers=Vulkan/RADV)。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libgl1 libgl1:i386 \
       libvulkan1 libvulkan1:i386 \
       vulkan-tools \
+ && if [ "$GPU" = "amd" ]; then \
+      apt-get install -y --no-install-recommends \
+        libglx-mesa0 libglx-mesa0:i386 \
+        libgl1-mesa-dri libgl1-mesa-dri:i386 \
+        mesa-vulkan-drivers mesa-vulkan-drivers:i386 ; \
+    fi \
  && rm -rf /var/lib/apt/lists/*
 
 # umu-launcher の latest を GitHub Releases から取得してインストール。
@@ -53,11 +66,21 @@ RUN install -o resonite -g resonite -m 0644 /dev/null /etc/machine-id \
  && mkdir -p /var/lib/dbus \
  && ln -sf /etc/machine-id /var/lib/dbus/machine-id
 
-# Resonite 本体の書き込み可能コピー置き場(専用 volume のマウントポイント)。
-# HOME(=volume)配下に置くと umu が親マウントを gamedrive(S:)にしてしまうため、
-# あえて HOME の外に置く。resonite 所有にしておくと named volume 初期化時に
-# その所有権が引き継がれ、非rootでも rsync で書き込める。
-RUN install -d -o resonite -g resonite /opt/resonite
+# 永続化する named volume のマウントポイントを resonite 所有で先に作っておく。
+# Docker は空の named volume を初回マウント時にイメージ側ディレクトリの所有権で
+# 初期化するため、ここで resonite 所有にしておかないと root 所有の volume になり
+# 非rootユーザが書き込めなくなる(初回 rsync / umu 展開が EACCES で失敗する)。
+#   /opt/resonite     : Resonite 本体の書き込み可能コピー(HOME外。理由は entrypoint 参照)
+#   ~/.local/share    : umu/Proton/Steam Linux Runtime + Resonite ユーザデータ(login/設定)
+#   ~/.cache          : Resonite アセットキャッシュ + シェーダキャッシュ
+#   ~/prefix          : Wine プレフィックス(WINEPREFIX)
+# HOME 全体ではなく「再取得が高価/ログイン状態を保ちたい」ものだけを volume にする。
+# machine-id・各種 log・.dbus 等の使い捨て状態はコンテナごとに新規生成させる。
+RUN install -d -o resonite -g resonite \
+      /opt/resonite \
+      /home/resonite/.local /home/resonite/.local/share \
+      /home/resonite/.cache \
+      /home/resonite/prefix
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
@@ -65,8 +88,8 @@ USER resonite
 ENV HOME=/home/resonite
 WORKDIR /home/resonite
 
-# umu の設定。WINEPREFIX / Proton / Steam Linux Runtime はすべて HOME 配下に
-# 作られるので、HOME を named volume にすれば丸ごと永続化できる。
+# umu の設定。WINEPREFIX は ~/prefix、Proton/Steam Linux Runtime は ~/.local/share、
+# アセットは ~/.cache に作られる。これらを named volume にして永続化する(上で作成)。
 # GAMEID=umu-default は umu DB に無いゲーム(=Resonite)向けの汎用ID。
 ENV GAMEID=umu-default \
     WINEPREFIX=/home/resonite/prefix

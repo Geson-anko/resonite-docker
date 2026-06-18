@@ -1,0 +1,13 @@
+# AMD GPU 用オーバーレイ。run.sh が AMD を検出したとき base に重ねる:
+#   docker compose -f compose.yaml -f compose.amd.yml up --build
+# AMD は専用 runtime 不要(通常の runc)。GPU アクセスは base の /dev/dri と
+# render/video グループで足り、ユーザ空間ドライバ(Mesa RADV)はイメージに同梱済み。
+# 注: 検証環境は NVIDIA のため AMD 経路は未実機確認(標準的な構成に基づく)。
+services:
+  app:
+    build:
+      args:
+        GPU: amd             # Mesa(RADV)を同梱してビルド
+    environment:
+      # Vulkan ICD を Mesa RADV に固定(AMDVLK が紛れても挙動を安定させる)。
+      AMD_VULKAN_ICD: RADV
