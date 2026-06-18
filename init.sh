@@ -75,6 +75,18 @@ if [ ! -e "$RESONITE_DIR/Resonite.exe" ]; then
        "RESONITE_DIR=... ./init.sh で場所を指定できます。" >&2
 fi
 
+# 音声(PulseAudio/PipeWire)ソケットの存在を確認する。compose は
+# /run/user/<uid>/pulse/native を mount し PULSE_SERVER=unix:/tmp/pulse-native で指す。
+# 無い(音声サーバ未起動)と Resonite のエンジンが出力デバイスを開けず、初回オンボーディングの
+# Audio ステップでフリーズすることがある。CMD の -SkipIntroTutorial で回避はしているが、
+# 実際の音声出力にはホスト側で PipeWire(または PulseAudio)が動いている必要がある。
+PULSE_SOCK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pulse/native"
+if [ ! -S "$PULSE_SOCK" ]; then
+  echo "warning: PulseAudio/PipeWire ソケットが見つかりません: $PULSE_SOCK" >&2
+  echo "  音声が出ず、初回オンボーディングでフリーズする場合があります。" >&2
+  echo "  ホストで PipeWire(または PulseAudio)が起動しているか確認してください。" >&2
+fi
+
 # Steam Linux Runtime(pressure-vessel)は unprivileged user namespace を使う。
 # Ubuntu 24.04 は既定でこれを AppArmor で制限しているので 0 に下げる必要がある。
 # (コンテナ内からは設定できない=ホスト側で設定する)

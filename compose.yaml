@@ -15,6 +15,11 @@ services:
       # SSH接続だとホスト側の $DISPLAY は空なので .env の検出値を使う。
       DISPLAY: ${DISPLAY:-:0}
       XAUTHORITY: /tmp/.Xauthority
+      # 音声: ホストの PulseAudio/PipeWire ソケットへ接続する。Resonite のエンジンは
+      # ネイティブ Linux で動き、その音声バックエンドは libpulse 経由でここに繋ぐ。
+      # 未設定/未接続だと出力デバイスを開けず初回オンボーディングの Audio ステップで
+      # エンジンがハングしてフリーズする(下の volume でソケットを mount している)。
+      PULSE_SERVER: unix:/tmp/pulse-native
     # Steam Linux Runtime(pressure-vessel)が user namespace を張るために必要。
     # ホスト側で kernel.apparmor_restrict_unprivileged_userns=0 も必須(./init.sh が確認)。
     security_opt:
@@ -44,6 +49,10 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
       # 稼働中の Xorg が実際に使っている認証クッキー(gdm)。
       - /run/user/${HOST_UID:-1000}/gdm/Xauthority:/tmp/.Xauthority:ro
+      # ホストの PulseAudio/PipeWire の Unix ソケット(音声出力先)。PipeWire 環境では
+      # pipewire-pulse が /run/user/<uid>/pulse/native を提供する。PULSE_SERVER がこれを指す。
+      # ソケットへの connect は書き込み権限が要るので :ro は付けない。
+      - /run/user/${HOST_UID:-1000}/pulse/native:/tmp/pulse-native
       # Resonite 本体(ホストのSteam版)を read-only でマウント。
       - ${RESONITE_DIR:?run ./init.sh first}:/resonite:ro
       # --- 永続化(HOME 全体ではなく必要なものだけを named volume にする) ---

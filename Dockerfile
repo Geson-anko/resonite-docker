@@ -43,6 +43,18 @@ RUN apt-get update \
     fi \
  && rm -rf /var/lib/apt/lists/*
 
+# 音声: ネイティブ Linux 側の PulseAudio クライアント(libpulse)。
+# Resonite は Bootstrapper が Wine を検出するとエンジン本体をネイティブ Linux の .NET で
+# 起動する(Wine で動くのは Renderer の .exe だけ)。そのためエンジンの音声バックエンド
+# (SoundFlow/miniaudio)は Wine ではなく Linux の libpulse を dlopen し、ホストの
+# PipeWire/PulseAudio に繋ぐ。これが無い・繋げないと出力デバイスを開けず、音が出ないうえ
+# 初回オンボーディングの「Audio」ステップでエンジンの Update ループごとハングしてフリーズする。
+# 実体のソケットは compose で mount し PULSE_SERVER で指す。エンジンは x86_64 なので amd64 のみ。
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libpulse0 \
+ && rm -rf /var/lib/apt/lists/*
+
 # umu-launcher の latest を GitHub Releases から取得してインストール。
 # Debian 13 用の公式 .deb (amd64 の python3 モジュール + arch:all 本体) を使う。
 RUN apt-get update \
@@ -99,4 +111,9 @@ ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # 既定で Resonite を起動(entrypoint が volume へ同期したコピーを実行)。
 # 初回は Proton/runtime のDL + インストールのコピーで時間がかかる。
-CMD ["umu-run", "/opt/resonite/Resonite.exe"]
+#
+# -SkipIntroTutorial: 初回オンボーディング(言語/音声/…のチュートリアル)を出さずに
+#   そのままダッシュへ入る。コンテナ運用では毎回の初回ウィザードが不要なため省く。
+#   音声依存の「Audio」ステップでのフリーズは上の libpulse で解消済みで、これはその保険
+#   兼 UX 改善。チュートリアルを通常どおり見たい場合はこの引数を外す。
+CMD ["umu-run", "/opt/resonite/Resonite.exe", "-SkipIntroTutorial"]
