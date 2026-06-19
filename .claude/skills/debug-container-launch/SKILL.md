@@ -33,5 +33,4 @@ Most failures here are host-integration issues, not Resonite bugs. Start with `.
 
 ## Notes
 
-- The AMD overlay is **unverified on real hardware**; treat AMD-only failures as suspect-the-config first.
 - When you find and fix a new failure mode, add a comment at the relevant setting explaining what it prevents — that's the house style.

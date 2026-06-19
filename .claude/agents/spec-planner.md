@@ -18,7 +18,7 @@ When invoked, you will:
    - **Affected files**: Which of `init.sh` / `run.sh` / `entrypoint.sh` / `Dockerfile` / `compose*.yml` change, and how the two-stage `init.sh → run.sh` flow is impacted.
    - **Approach**: Step-by-step strategy following existing conventions (host values → `.env`; GPU-specific → overlay; shared → base; writable state → named volume outside `$HOME`).
    - **Verification**: How to confirm it works — what to look for in `./run.sh logs -f`, which failure modes (X11 BadValue, IPC timeout, audio hang, EACCES on volumes, drive-letter misresolution) to rule out.
-   - **Risks**: What could break the load-bearing invariants, and AMD-path caveats (unverified hardware).
+   - **Risks**: What could break the load-bearing invariants.
 
 4. **Keep it reviewable**: Concrete enough to implement without guessing, not so verbose it becomes noise.
 

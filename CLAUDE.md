@@ -50,8 +50,8 @@ RESONITE_DIR=/path/to/Resonite ./init.sh
 `compose.yaml` が GPU 非依存のベース。`run.sh` がちょうど1つの overlay を重ねる:
 
 - `compose.nvidia.yml` — `runtime: nvidia`(toolkit がホストのドライバを注入)、`NVIDIA_VISIBLE_DEVICES`/`NVIDIA_DRIVER_CAPABILITIES` を設定。イメージ内の Mesa は使われない。
-- `compose.amd.yml` — 通常の `runc`。GPU アクセスはベースの `/dev/dri` + グループで足り、Mesa/RADV のユーザ空間ドライバはイメージに同梱(`GPU=amd` ビルド arg)。**AMD 経路は実機未検証**(開発環境は NVIDIA)。
-- `compose.intel.yml` — Intel iGPU 用。AMD と同様に通常の `runc` + ベースの `/dev/dri` で動き、Mesa(GL=iris / Vulkan=ANV)を同梱(`GPU=intel` ビルド arg)。Mesa パッケージは AMD と共通で、実機が Intel のみなら ANV だけがデバイスを列挙するため ICD 固定は不要。**iGPU は重い**(起動・最低限の描画は可能)。**Intel 経路は実機未検証**。
+- `compose.amd.yml` — 通常の `runc`。GPU アクセスはベースの `/dev/dri` + グループで足り、Mesa/RADV のユーザ空間ドライバはイメージに同梱(`GPU=amd` ビルド arg)。**AMD 経路は実機検証済**。
+- `compose.intel.yml` — Intel iGPU 用。AMD と同様に通常の `runc` + ベースの `/dev/dri` で動き、Mesa(GL=iris / Vulkan=ANV)を同梱(`GPU=intel` ビルド arg)。Mesa パッケージは AMD と共通で、実機が Intel のみなら ANV だけがデバイスを列挙するため ICD 固定は不要。**iGPU は重い**(起動・最低限の描画は可能)。**Intel 経路は実機検証済**。
 
 ### Resonite の実際の動き方(最重要のメンタルモデル)
 
@@ -80,7 +80,7 @@ Resonite は自身の install ディレクトリに書き込む(ログ等)ため
 ## 規約
 
 - **コメントが根拠を担う。** このプロジェクトの価値は各ホストハックの *なぜ* にある。設定を変えたら隣のコメントも更新し、追加したらそれが防ぐ失敗モードを(既存コメントと同様に)説明する。
-- **リポジトリ内のコメントは日本語**。この CLAUDE.md も日本語。`.claude/` の agents / skills は英語で統一している。ユーザの言語に合わせて応答する(`japanese` skill 参照)。
+- **ソースのコメント・実行時メッセージ・既定の README(`README.md`)は英語**。公開リポジトリのため英語を既定とし、日本語は `README.ja.md` で提供する(README は両言語を同期させる)。この CLAUDE.md と `.claude/` の agents / skills は英語/日本語の現状維持。ユーザの言語に合わせて応答する(`japanese` skill 参照)。
 - ホスト固有の値をハードコードしない — それらは `init.sh` 経由で `.env` に入れる。GPU ベンダー固有の設定は overlay に、共通設定は `compose.yaml` に置く。
-- `Dockerfile` は意図的に最小: NVIDIA には GLVND/Vulkan ローダだけ(ドライバは toolkit が注入)、Mesa は **AMD のときだけ**入れる。ランタイムが既に提供する ICD/ドライバを足さない。
+- `Dockerfile` は意図的に最小: NVIDIA には GLVND/Vulkan ローダだけ(ドライバは toolkit が注入)、Mesa は **AMD / Intel のときだけ**入れる。ランタイムが既に提供する ICD/ドライバを足さない。
 - 永続化レイアウト・`/opt/resonite` の置き場所・`ipc: host` / namespace 設定の変更は、ドライブレター解決・共有メモリ IPC・X11 にまたがって効く。これらは load-bearing(構造を支える)設定として扱う。

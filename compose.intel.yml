@@ -1,21 +1,21 @@
-# Intel GPU(iGPU)用オーバーレイ。run.sh が Intel を検出したとき base に重ねる:
+# Intel GPU (iGPU) overlay. Layered on base when run.sh detects Intel:
 #   docker compose -f compose.yaml -f compose.intel.yml up --build
-# Intel iGPU は AMD と同じく専用 runtime 不要(通常の runc)。GPU アクセスは base の
-# /dev/dri と render/video グループで足り、ユーザ空間ドライバ(Mesa: GL=iris,
-# Vulkan=ANV)はイメージに同梱済み(GPU=intel ビルド arg)。
+# Like AMD, an Intel iGPU needs no special runtime (plain runc). GPU access is covered
+# by base's /dev/dri and the render/video groups; the user-space driver (Mesa: GL=iris,
+# Vulkan=ANV) ships in the image (GPU=intel build arg).
 #
-# Vulkan ICD の固定は不要: mesa-vulkan-drivers は RADV(AMD)/ANV(Intel)両方の ICD を
-# 入れるが、実機が Intel のみなら RADV はデバイスを列挙せず ANV だけが見えるため、
-# ローダが自動的に Intel を選ぶ(AMD overlay の AMD_VULKAN_ICD のような固定は要らない)。
+# No Vulkan ICD pinning needed: mesa-vulkan-drivers ships both RADV (AMD) and ANV (Intel)
+# ICDs, but on an Intel-only host RADV enumerates no devices and only ANV is visible, so
+# the loader picks Intel automatically (no AMD_VULKAN_ICD-style pin required).
 #
-# 注: iGPU は VRAM/帯域が限られるため Resonite の動作は重い(起動・最低限の描画は可能)。
-# 注: 検証環境は NVIDIA のため Intel 経路は未実機確認(標準的な Mesa 構成に基づく)。
+# Note: an iGPU has limited VRAM/bandwidth, so Resonite runs heavy (launch and minimal
+# rendering work).
 services:
   app:
     build:
       args:
-        GPU: intel           # Mesa(iris/ANV)を同梱してビルド
-    # iGPU 1枚の構成なので /dev/dri を丸ごと渡す(devices を overlay 側で指定する
-    # 理由は compose.yaml のコメント参照)。
+        GPU: intel           # Build with Mesa (iris/ANV) included.
+    # Single iGPU, so pass all of /dev/dri (see compose.yaml for why devices live in
+    # the overlays).
     devices:
       - /dev/dri:/dev/dri

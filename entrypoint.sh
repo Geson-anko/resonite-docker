@@ -1,23 +1,23 @@
 #!/bin/sh
 set -e
 
-# machine-id はコンテナごとに一意であるべきなので、起動の都度生成する。
-# (ビルド時に焼くと全コンテナで同じIDになってしまう)
-# /etc/machine-id はビルド時に resonite 所有にしてあるので非rootでも書ける。
+# machine-id should be unique per container, so generate it on every start.
+# (Baking it at build time would give every container the same ID.)
+# /etc/machine-id is resonite-owned at build time, so the non-root user can write it.
 tr -d - < /proc/sys/kernel/random/uuid > /etc/machine-id
 
-# Resonite はインストールディレクトリに書き込む(ログ等)ため ro では起動できない。
-# ホストのインストール(/resonite, ro)を書き込み可能な専用 volume(APP_DIR)へ
-# rsync で差分同期し、そこから実行する。ホスト側のインストールは一切変更しない。
+# Resonite writes into its install directory (logs, etc.), so it can't run from a
+# read-only mount. rsync the host's install (/resonite, ro) into a writable volume
+# (APP_DIR) and run from there. The host install is never modified.
 #
-# APP_DIR は HOME の外( /opt )に置く。HOME(/home/resonite)は named volume の
-# マウントポイントなので、その配下に install を置くと umu が親マウントを
-# gamedrive(S:)にしてしまい、CWD の現在ドライブが S: になって絶対パスが壊れる。
-# /opt 配下なら install の親はマウントで無くなり CWD が Z:(→/)で正しく解決される。
+# APP_DIR stays outside HOME (/opt). HOME (/home/resonite) is a named-volume mount
+# point, so an install under it makes umu treat the parent mount as the S: gamedrive,
+# the CWD's current drive becomes S:, and absolute paths (/dev/shm, ...) misresolve.
+# Under /opt the install's parent is not a mount, so CWD is Z: (-> /) and resolves right.
 #
-# rsync は size+mtime で差分を検出し、変化したファイルだけ転送する
-# (初回フルコピー、以降は更新/MOD分のみ)。--delete でホスト側の削除も追従、
-# --itemize-changes で実際に変わったものだけ報告(差分が無ければ何もしない)。
+# rsync diffs by size+mtime and transfers only changed files (full copy on first run,
+# only updates/MODs after). --delete tracks host-side deletions; --itemize-changes
+# reports only what actually changed (nothing if there's no diff).
 APP_DIR=/opt/resonite
 mkdir -p "$APP_DIR"
 echo "syncing Resonite -> $APP_DIR (rsync; first run copies ~2GB)..."
@@ -30,11 +30,11 @@ else
   echo "synced $n changed item(s) -> $APP_DIR"
 fi
 
-# ResoBoot はゲームファイルを CWD 相対で読み書きするので、コピー先を CWD にする。
-# APP_DIR(/opt/resonite)は HOME 外なので CWD の現在ドライブは Z:(→/)になり、
-# ResoBoot/レンダラが渡す絶対 Unix パス(/dev/shm, /opt/resonite/Renderer 等)が
-# 正しく解決される。これによりエンジン↔ResoBoot の共有メモリIPC(Cloudtoid)も
-# 同じ /dev/shm を指して成立し、レンダラが起動できる(ホストと同じ挙動)。
+# ResoBoot reads/writes game files relative to CWD, so cd into the copy. Because
+# APP_DIR (/opt/resonite) is outside HOME, CWD's current drive is Z: (-> /), so the
+# absolute Unix paths ResoBoot/the renderer pass (/dev/shm, /opt/resonite/Renderer, ...)
+# resolve correctly. This also lets the engine<->ResoBoot shared-memory IPC (Cloudtoid)
+# agree on the same /dev/shm, so the renderer can start (same behavior as on the host).
 cd "$APP_DIR"
 
 exec "$@"

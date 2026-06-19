@@ -1,20 +1,20 @@
-# NVIDIA GPU 用オーバーレイ。run.sh が NVIDIA を検出したとき base に重ねる:
+# NVIDIA GPU overlay. Layered on base when run.sh detects NVIDIA:
 #   docker compose -f compose.yaml -f compose.nvidia.yml up --build
-# ドライバ(libGLX_nvidia / Vulkan ICD)は nvidia-container-toolkit がホストから
-# 注入するので、イメージ内の Mesa は使われない。
+# The driver (libGLX_nvidia / Vulkan ICD) is injected from the host by
+# nvidia-container-toolkit, so the image's Mesa is unused.
 services:
   app:
     build:
       args:
-        GPU: nvidia          # Mesa を入れない最小イメージでビルド
-    # GPU は toolkit が注入するが、X への DRI3 present 用に /dev/dri も渡す
-    # (devices を overlay 側で指定する理由は compose.yaml のコメント参照)。
+        GPU: nvidia          # Build a minimal image without Mesa.
+    # The toolkit injects the GPU, but /dev/dri is still passed for DRI3 present to X
+    # (see compose.yaml for why devices live in the overlays).
     devices:
       - /dev/dri:/dev/dri
-    # ホストと同一バージョンの NVIDIA ドライバを toolkit が注入する。
+    # The toolkit injects the host's matching NVIDIA driver version.
     runtime: nvidia
     environment:
-      # 描画に使う GPU。モニタ接続側(.env の UUID)。未検出なら all。
+      # Rendering GPU: the monitor side (UUID from .env). `all` if not detected.
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_GPU_UUID:-all}
-      # GL/Vulkan/表示まで使うので全capabilityを有効化(既定はutility,computeのみ)。
+      # Enable all capabilities (default is utility,compute only); we need GL/Vulkan/display.
       NVIDIA_DRIVER_CAPABILITIES: all

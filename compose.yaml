@@ -1,6 +1,6 @@
-# Resonite をコンテナ内で起動し、ホストの X11 デスクトップへ描画する基本構成。
-# GPU ベンダー固有の設定は持たない(共通部分のみ)。実際の起動は run.sh が
-# GPU を検出して compose.nvidia.yml / compose.amd.yml を重ねて行う:
+# Base config: run Resonite in a container and render to the host's X11 desktop.
+# No GPU-vendor-specific settings here (common parts only). run.sh detects the GPU
+# and layers compose.nvidia.yml / compose.amd.yml / compose.intel.yml on top:
 #   docker compose -f compose.yaml -f compose.nvidia.yml up --build   # NVIDIA
 #   docker compose -f compose.yaml -f compose.amd.yml    up --build   # AMD
 services:
@@ -8,75 +8,76 @@ services:
     build:
       context: .
       args:
-        # 非rootユーザをホストUID/GIDで作る(.env は ./init.sh が生成)。
+        # Create the non-root user with the host UID/GID (.env from ./init.sh).
         HOST_UID: ${HOST_UID:-1000}
         HOST_GID: ${HOST_GID:-1001}
     environment:
-      # SSH接続だとホスト側の $DISPLAY は空なので .env の検出値を使う。
+      # Over SSH the host's $DISPLAY is empty, so use the value detected in .env.
       DISPLAY: ${DISPLAY:-:0}
       XAUTHORITY: /tmp/.Xauthority
-      # 音声: ホストの PulseAudio/PipeWire ソケットへ接続する。Resonite のエンジンは
-      # ネイティブ Linux で動き、その音声バックエンドは libpulse 経由でここに繋ぐ。
-      # 未設定/未接続だと出力デバイスを開けず初回オンボーディングの Audio ステップで
-      # エンジンがハングしてフリーズする(下の volume でソケットを mount している)。
+      # Audio: connect to the host's PulseAudio/PipeWire socket. Resonite's engine
+      # runs natively on Linux and its audio backend connects here via libpulse.
+      # If unset/unreachable it can't open an output device and freezes at the
+      # first-run onboarding "Audio" step (socket mounted in volumes below).
       PULSE_SERVER: unix:/tmp/pulse-native
-    # Steam Linux Runtime(pressure-vessel)が user namespace を張るために必要。
-    # ホスト側で kernel.apparmor_restrict_unprivileged_userns=0 も必須(./init.sh が確認)。
+    # Required for Steam Linux Runtime (pressure-vessel) to set up user namespaces.
+    # The host also needs kernel.apparmor_restrict_unprivileged_userns=0 (init.sh checks).
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
-    # ホストの X サーバへ描画するため IPC 名前空間をホストと共有する。
-    # X の MIT-SHM 拡張は SysV 共有メモリを X クライアント(コンテナ内のエンジン/Wine)と
-    # X サーバ(ホスト)で共有するが、Docker 既定は IPC 名前空間を分離するため、コンテナの
-    # shm セグメントをホストの X サーバがアタッチできず X_ShmPutImage が BadValue で失敗する。
-    # Xlib の既定エラーハンドラは時に exit() を呼ぶので、実行ごとにクラッシュ/ハング/
-    # たまに成功とブレる。ipc: host で SysV shm を共有すると解消する。
-    # 併せて Resonite のエンジン↔ResoBoot↔Unityレンダラ間 IPC(Cloudtoid.Interprocess,
-    # /dev/shm 上の memory-mapped file)も、ホストの広い /dev/shm(31GB)を使えるので
-    # Docker 既定の 64MB 不足(Bootstrapper messaging timeout)も同時に回避できる。
-    # ※ ipc: host とは shm_size を併用できないため shm_size は指定しない。
+    # Share the IPC namespace with the host so we can render to the host's X server.
+    # The X MIT-SHM extension shares SysV shm between the X client (engine/Wine in the
+    # container) and the X server (host); Docker's default isolates the IPC namespace,
+    # so the host X server can't attach the container's shm segment and X_ShmPutImage
+    # fails with BadValue. Xlib's default error handler sometimes calls exit(), so runs
+    # flip between crash/hang/occasional success. ipc: host shares SysV shm and fixes it.
+    # It also gives Resonite's engine<->ResoBoot<->Unity-renderer IPC (Cloudtoid.Interprocess,
+    # a memory-mapped file in /dev/shm) the host's large /dev/shm, avoiding Docker's
+    # default 64 MB shortage (Bootstrapper messaging timeout).
+    # Note: shm_size can't be combined with ipc: host, so it isn't set.
     ipc: host
-    # GPU デバイス(/dev/dri)の渡し方は GPU ベンダーで異なるので overlay 側で指定する:
-    #  - NVIDIA: ドライバは toolkit が注入。X への DRI3 present 用に /dev/dri を丸ごと渡す。
-    #  - Intel:  iGPU 1枚。/dev/dri を丸ごと渡し Mesa(iris/ANV)が直接使う。
-    #  - AMD:    マルチGPU機(サーバの BMC 表示チップ ASPEED + dGPU 複数 等)では
-    #            /dev/dri を丸ごと渡すと、レンダラの動画デコード初期化(GStreamer/
-    #            Media Foundation)が GBM/EGL で全 DRI ノードを列挙し、3D 不可の BMC
-    #            チップ(driver (null))を踏んでクラッシュする。そこで描画 GPU
-    #            (モニタ接続側)の render ノードだけを渡す(init.sh が AMD_RENDER_NODE に検出)。
-    # ※ devices を base に置かないのは、compose のリストが「追記」マージで base から
-    #    消せず、AMD overlay 側で /dev/dri 全体を除外できないため(各 overlay で個別指定)。
-    # /dev/dri の render/video グループに非rootユーザを参加させる(.env に GID 記録)。
+    # How /dev/dri (the GPU) is passed in differs per vendor, so the overlays set it:
+    #  - NVIDIA: driver injected by the toolkit; pass all of /dev/dri for DRI3 present.
+    #  - Intel:  single iGPU; pass all of /dev/dri, used directly by Mesa (iris/ANV).
+    #  - AMD:    on a multi-GPU host (e.g. a server's ASPEED BMC chip + several dGPUs)
+    #            passing all of /dev/dri makes the renderer's video-decode init
+    #            (GStreamer/Media Foundation) enumerate every DRI node via GBM/EGL and
+    #            crash on the non-3D BMC chip (driver (null)). So only the rendering GPU's
+    #            render node is passed (init.sh detects it into AMD_RENDER_NODE).
+    # Note: devices isn't in base because compose merges lists by append — base entries
+    #       can't be removed, so the AMD overlay couldn't exclude all of /dev/dri.
+    # Add the non-root user to /dev/dri's render/video groups (GIDs recorded in .env).
     group_add:
       - "${RENDER_GID:-110}"
       - "${VIDEO_GID:-44}"
     volumes:
-      # X11 の Unix ソケット。Wayland セッションでは Xwayland がここにソケットを
-      # 出すので、Resonite の Wine レンダラは Xwayland 経由で描画できる。
+      # X11 Unix socket. On a Wayland session Xwayland exposes its socket here, so
+      # Resonite's Wine renderer can draw through Xwayland.
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
-      # X 認証クッキー。init.sh が現在の DISPLAY のクッキーを FamilyWild 化して
-      # .xauth に生成し、そのパスを .env の XAUTHORITY_HOST に書く。ホスト名に依存
-      # しないのでコンテナ(ランダムなホスト名)からでも認証が通る。デスクトップ毎に
-      # クッキーの実体パスが違う(gdm/KDE/Wayland 等)問題を init.sh 側で吸収する。
-      # 既定の /dev/null は「init.sh 未実行」時に phantom ディレクトリを作らせない保険。
+      # X auth cookie. init.sh takes the current DISPLAY's cookie, rewrites it to
+      # FamilyWild into .xauth, and writes that path to XAUTHORITY_HOST in .env. Being
+      # host-independent, it authenticates from the container (random hostname) too.
+      # init.sh absorbs the per-desktop cookie path differences (gdm/KDE/Wayland).
+      # The /dev/null default keeps Docker from creating a phantom dir if init.sh
+      # wasn't run.
       - ${XAUTHORITY_HOST:-/dev/null}:/tmp/.Xauthority:ro
-      # ホストの PulseAudio/PipeWire の Unix ソケット(音声出力先)。PipeWire 環境では
-      # pipewire-pulse が /run/user/<uid>/pulse/native を提供する。PULSE_SERVER がこれを指す。
-      # ソケットへの connect は書き込み権限が要るので :ro は付けない。
+      # The host's PulseAudio/PipeWire Unix socket (audio output). On PipeWire,
+      # pipewire-pulse provides /run/user/<uid>/pulse/native; PULSE_SERVER points at it.
+      # connect() to the socket needs write access, so no :ro.
       - /run/user/${HOST_UID:-1000}/pulse/native:/tmp/pulse-native
-      # Resonite 本体(ホストのSteam版)を read-only でマウント。
+      # Resonite itself (the host's Steam install), mounted read-only.
       - ${RESONITE_DIR:?run ./init.sh first}:/resonite:ro
-      # --- 永続化(HOME 全体ではなく必要なものだけを named volume にする) ---
-      # Resonite 本体の書き込み可能コピー。HOME(=volume mount)配下に置くと umu が
-      # install の親マウントを gamedrive(S:)にして CWD の現在ドライブが S: になり、
-      # 絶対パス(/dev/shm 等)がドライブ相対で誤解決される。HOME 外(/opt)の専用
-      # volume に置けば親はマウントで無くなり CWD が Z:(→/)で解決され正常動作する。
+      # --- Persistence (only the necessary paths as named volumes, not all of HOME) ---
+      # Writable copy of Resonite. Placed under HOME (a volume mount) it would make umu
+      # treat the install's parent mount as the S: gamedrive, the CWD's current drive
+      # becomes S:, and absolute paths (/dev/shm, ...) misresolve. In a dedicated volume
+      # outside HOME (/opt) the parent isn't a mount, so CWD is Z: (-> /) and works.
       - resonite-app:/opt/resonite
-      # umu/Proton/Steam Linux Runtime + Resonite ユーザデータ(login/設定)。
+      # umu/Proton/Steam Linux Runtime + Resonite user data (login/settings).
       - resonite-share:/home/resonite/.local/share
-      # Resonite アセットキャッシュ + シェーダキャッシュ(再ダウンロード回避)。
+      # Resonite asset cache + shader cache (avoids re-downloading).
       - resonite-cache:/home/resonite/.cache
-      # Wine プレフィックス(WINEPREFIX)。
+      # Wine prefix (WINEPREFIX).
       - resonite-prefix:/home/resonite/prefix
 
 volumes:

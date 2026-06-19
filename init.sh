@@ -1,31 +1,29 @@
 #!/usr/bin/env bash
-# 現在のUID/GID・Resonite の場所・X ディスプレイを .env に書き出す。
-#   ./init.sh   ->  docker compose up --build
-# 別の場所に Resonite がある場合: RESONITE_DIR=/path/to/Resonite ./init.sh
+# Probe the host and write per-machine values to .env, ready for run.sh:
+#   ./init.sh   ->  ./run.sh
+# If Resonite lives elsewhere: RESONITE_DIR=/path/to/Resonite ./init.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
 RESONITE_DIR="${RESONITE_DIR:-$HOME/.steam/steam/steamapps/common/Resonite}"
 
-# X ディスプレイを検出する。SSH 接続だと $DISPLAY が未設定なので、
-# ログイン中のデスクトップセッションから拾う。
-# Wayland セッションでも X11 アプリ(Resonite の Wine レンダラ)は Xwayland 経由で
-# 描画するので、ここでは「接続すべき X ディスプレイ」= Xwayland のソケットを探す。
+# Find the X display to render into. Over SSH $DISPLAY is unset, so fall back to
+# the active desktop session. On Wayland the renderer (a Wine .exe, an X11 app)
+# draws through Xwayland, so what we want here is the Xwayland socket.
 detect_display() {
-  # 1) ローカル実行なら既存の $DISPLAY をそのまま使う(Wayland 上では Xwayland の値)
+  # 1) Local run: trust the existing $DISPLAY (already Xwayland's value on Wayland).
   if [ -n "${DISPLAY:-}" ]; then
     printf '%s' "$DISPLAY"; return
   fi
-  # 2) who からログイン中の X ディスプレイ(:N)を拾う(SSHでも見える)
+  # 2) Pick the logged-in X display (:N) from `who` (visible even over SSH).
   local d
   d="$(who 2>/dev/null | awk '
     $2 ~ /^:[0-9]+(\.[0-9]+)?$/      { print $2; exit }
     $NF ~ /^\(:[0-9]+(\.[0-9]+)?\)$/ { s=$NF; gsub(/[()]/,"",s); print s; exit }')"
   if [ -n "$d" ]; then printf '%s' "$d"; return; fi
-  # 3) X ソケットから推定。Wayland では Xwayland のソケットが複数並ぶことがあり
-  #    (例: ディスプレイマネージャの :0 は root 所有、ユーザの Xwayland は :1)、
-  #    root 所有のグリーター用ソケットに繋ぐと認証クッキーが無く接続できない。
-  #    そこで自分(現在UID)が所有するソケットを優先する。
+  # 3) Infer from the X sockets. Wayland may expose several (e.g. the display
+  #    manager's root-owned :0 greeter plus the user's Xwayland :1); the greeter
+  #    socket has no usable cookie, so prefer the one owned by the current user.
   local me s n owner
   me="$(id -u)"
   for s in /tmp/.X11-unix/X[0-9]*; do
@@ -35,35 +33,33 @@ detect_display() {
     n="${s##*/X}"
     printf ':%s' "$n"; return
   done
-  # 4) それも無ければ最小番号のソケット
+  # 4) Otherwise the lowest-numbered socket.
   d="$(ls /tmp/.X11-unix/ 2>/dev/null | sed -n 's/^X\([0-9]\+\)$/\1/p' | sort -n | head -n1)"
   if [ -n "$d" ]; then printf ':%s' "$d"; return; fi
-  # 5) 最終フォールバック
+  # 5) Last-resort fallback.
   printf ':0'
 }
 
 DISPLAY_DETECTED="$(detect_display)"
 
-# X 認証クッキー(Xauthority)を、コンテナ内からでも使える形で用意する。
+# Prepare an X auth cookie the container can actually use.
 #
-# なぜ必要か: コンテナ内の X クライアント(Wine レンダラ)が Xwayland/Xorg へ
-# 接続する際 MIT-MAGIC-COOKIE-1 で認証する。クッキーはホスト名に紐づくが、
-# コンテナのホスト名はランダムなコンテナIDなので、ホストの Xauthority をそのまま
-# 渡しても一致せず接続が拒否される(→ ウィンドウが出ず無言で落ちる)。
-# 旧構成は gdm 固定パスのクッキーを直接マウントしていたが、KDE/SDDM や Wayland
-# セッションにそのパスは無く、Docker が空ディレクトリを作って X 認証を壊していた。
+# Why: the container's X client (the Wine renderer) authenticates to Xwayland/Xorg
+# with MIT-MAGIC-COOKIE-1, which is tied to a hostname. The container's hostname is
+# a random container ID, so passing the host's Xauthority verbatim fails to match
+# and the connection is refused (window never appears, process exits silently).
 #
-# どう用意するか: 現在の DISPLAY のクッキーを取り出し、family を ffff
-# (FamilyWild = 任意ホスト一致)に書き換えた専用ファイル(.xauth)を生成する。
-# 「X11 GUI を Docker で動かす」定番手法で、Xorg でも Wayland(Xwayland)でも有効。
-# compose はこの .xauth を /tmp/.Xauthority にマウントする。
+# Fix: extract the cookie for the current DISPLAY and rewrite its family to ffff
+# (FamilyWild = match any host), into a dedicated file (.xauth). This is the standard
+# "X11 GUI in Docker" trick and works under both Xorg and Wayland (Xwayland). compose
+# mounts this .xauth at /tmp/.Xauthority.
 #
-# 取得元(ソース Xauthority)はデスクトップごとに場所が異なるので順に探す:
-#   $XAUTHORITY                              : セッションが明示(KDE/SDDM 等で多い)
-#   ~/.Xauthority                            : 古典的な既定
-#   /run/user/<uid>/gdm/Xauthority           : GNOME on Xorg(gdm)
-#   /run/user/<uid>/xauth_*                  : KDE/SDDM(Wayland の Xwayland)
-#   /run/user/<uid>/.mutter-Xwaylandauth.*   : GNOME on Wayland(Xwayland)
+# The source Xauthority lives in different places per desktop, so probe in order:
+#   $XAUTHORITY                              : explicit (common on KDE/SDDM)
+#   ~/.Xauthority                            : classic default
+#   /run/user/<uid>/gdm/Xauthority           : GNOME on Xorg (gdm)
+#   /run/user/<uid>/xauth_*                  : KDE/SDDM (Xwayland)
+#   /run/user/<uid>/.mutter-Xwaylandauth.*   : GNOME on Wayland (Xwayland)
 detect_xauthority_src() {
   local f
   if [ -n "${XAUTHORITY:-}" ] && [ -r "${XAUTHORITY}" ]; then
@@ -76,15 +72,15 @@ detect_xauthority_src() {
       /run/user/"$(id -u)"/.mutter-Xwaylandauth.* ; do
     [ -r "$f" ] && { printf '%s' "$f"; return; }
   done
-  return 0  # 見つからない=空。set -e 下で無言終了させない。
+  return 0  # Not found = empty. Don't let set -e exit silently here.
 }
 
 XAUTH_SRC="$(detect_xauthority_src)"
-XAUTH_FILE="$PWD/.xauth"   # 生成先(.gitignore 済み)。compose がマウントする。
+XAUTH_FILE="$PWD/.xauth"   # Generated (gitignored). compose mounts it.
 rm -f "$XAUTH_FILE"
 if [ -n "$XAUTH_SRC" ] && command -v xauth >/dev/null 2>&1; then
-  # ソースの DISPLAY 用クッキーを ffff(FamilyWild)へ書き換えて新ファイルへ取り込む。
-  # 前段が失敗しても init を止めないよう if で受け、空生成なら破棄する。
+  # Rewrite the source cookie's family to ffff (FamilyWild) into the new file.
+  # Guard with `if` so a failure here doesn't abort init; discard an empty result.
   if xauth -f "$XAUTH_SRC" nlist "$DISPLAY_DETECTED" 2>/dev/null \
        | sed -e 's/^..../ffff/' \
        | xauth -f "$XAUTH_FILE" nmerge - >/dev/null 2>&1 && [ -s "$XAUTH_FILE" ]; then
@@ -93,16 +89,16 @@ if [ -n "$XAUTH_SRC" ] && command -v xauth >/dev/null 2>&1; then
     rm -f "$XAUTH_FILE"
   fi
 fi
-# マウント先は常に存在させる(空でも phantom ディレクトリを作らせない)。
-# 中身が空なら X 認証は通らないが、その場合は .env 生成後に警告する。
+# Always make the mount target exist (an empty file, never a phantom directory).
+# If it's empty, X auth won't pass; we warn about that after writing .env.
 [ -e "$XAUTH_FILE" ] || : > "$XAUTH_FILE"
 
-# モニタが接続されている GPU を特定し、その UUID をコンテナへ渡す。
-# マルチGPU環境では、表示出力に使う GPU で描画させないと PRIME コピーが要る/映らない。
-# connected な DRM コネクタ -> PCI -> nvidia-smi の UUID と突き合わせる。
-# 注: 引数なし return は直前コマンドの終了コードを返す。set -e 下で
-# GPU_UUID=$(...) がそれを引き継ぎ無言で死ぬのを避けるため、検出失敗時は
-# 明示的に return 0 する(UUID 空 = コンテナ側で all にフォールバック)。
+# Identify the GPU the monitor is attached to and pass its UUID to the container.
+# On multi-GPU hosts, rendering on the wrong GPU needs a PRIME copy or shows nothing.
+# Match a connected DRM connector -> PCI address -> nvidia-smi UUID.
+# Note: a bare `return` yields the previous command's exit code; under set -e that
+# would make GPU_UUID=$(...) die silently on a miss, so we `return 0` explicitly
+# (empty UUID = the container falls back to `all`).
 detect_display_gpu() {
   command -v nvidia-smi >/dev/null 2>&1 || return 0
   for s in /sys/class/drm/card*-*/status; do
@@ -114,31 +110,30 @@ detect_display_gpu() {
             | awk -F', *' -v b="$short" 'BEGIN{b=toupper(b)} toupper($1) ~ b {print $2; exit}')"
     [ -n "$uuid" ] && { printf '%s' "$uuid"; return 0; }
   done
-  return 0  # 該当 GPU 無し -> UUID 空でフォールバック(非ゼロで死なせない)
+  return 0  # No matching GPU -> empty UUID, fall back rather than die nonzero.
 }
 
 GPU_UUID="$(detect_display_gpu)"
 
-# AMD: 描画に使う GPU(モニタが接続されている方)を特定し、その render ノードと
-# Mesa デバイス選択を .env に出力する。マルチGPU機(例: サーバの BMC 表示チップ
-# ASPEED + dGPU 複数)で /dev/dri を丸ごとコンテナに渡すと、二段で問題が起きる:
-#  1) レンダラ(Renderite=Unity/Vulkan)が表示用でない GPU(演算用 dGPU)を掴み、
-#     描画 GPU と present 先が食い違って落ちる。
-#  2) レンダラの動画デコード初期化(GStreamer/Media Foundation)が GBM/EGL で全 DRI
-#     ノードを列挙し、3D 不可の BMC 表示チップ(ast。driver (null)/kmsro missing)を
-#     踏んでクラッシュする(UnityCrashHandler 起動 → プロセス群が Killed)。
-# 対策は NVIDIA を NVIDIA_GPU_UUID で1枚に固定するのと同じ「表示 GPU だけを見せる」:
-#  - その GPU の render ノードだけを渡す(AMD_RENDER_NODE。compose.amd.yml が device 指定)
-#    → 他 GPU/BMC が /dev/dri に現れず、Vulkan も GBM/EGL の列挙も踏まない。
-#  - 念のため Mesa 選択も渡す(AMD_VK_DEVICE_SELECT=Vulkan, AMD_DRI_PRIME=GL/EGL)。
-# モニタが繋がった amdgpu カードを1枚特定する(BMC の Virtual/仮想 Writeback は除外)。
-# 出力: "<vendor>:<device> <pci-tag> <render-node>"
-#   例 "1002:7590 pci-0000_c3_00_0 /dev/dri/renderD129"(特定できなければ空)。
+# AMD: identify the rendering GPU (the one with the monitor attached) and emit its
+# render node + Mesa device selection. Passing all of /dev/dri to the container on a
+# multi-GPU host (e.g. a server's ASPEED BMC display chip + several dGPUs) breaks twice:
+#  1) The renderer (Renderite=Unity/Vulkan) grabs a non-display GPU; its render and
+#     present targets disagree and it crashes.
+#  2) The renderer's video-decode init (GStreamer/Media Foundation) enumerates every
+#     DRI node via GBM/EGL and trips over the non-3D BMC chip (ast, driver (null)),
+#     crashing the process group (UnityCrashHandler -> Killed).
+# Fix is the same "show only the display GPU" as pinning NVIDIA via NVIDIA_GPU_UUID:
+#  - Pass only that GPU's render node (AMD_RENDER_NODE; compose.amd.yml sets device).
+#  - Also pin Mesa selection (AMD_VK_DEVICE_SELECT for Vulkan, AMD_DRI_PRIME for GL/EGL).
+# Pick one monitor-connected amdgpu card (skip the BMC's Virtual/Writeback connectors).
+# Output: "<vendor>:<device> <pci-tag> <render-node>"
+#   e.g. "1002:7590 pci-0000_c3_00_0 /dev/dri/renderD129" (empty if none found).
 detect_amd_render_gpu() {
   local s con card drv vendor device pci tag rnode
   for s in /sys/class/drm/card*-*/status; do
     [ "$(cat "$s" 2>/dev/null)" = connected ] || continue
-    con="$(basename "$(dirname "$s")")"                 # 例: card2-DP-5
+    con="$(basename "$(dirname "$s")")"                 # e.g. card2-DP-5
     case "$con" in *-Virtual-*|*-Writeback-*) continue ;; esac
     card="${con%%-*}"                                   # card2
     drv="$(basename "$(readlink -f "/sys/class/drm/$card/device/driver" 2>/dev/null)" 2>/dev/null)"
@@ -151,22 +146,22 @@ detect_amd_render_gpu() {
     [ -n "$vendor" ] && [ -n "$device" ] && [ -n "$rnode" ] \
       && { printf '%s:%s %s %s' "$vendor" "$device" "$tag" "$rnode"; return 0; }
   done
-  return 0  # 該当GPU無し -> 空(compose 側で /dev/dri 全体にフォールバック)
+  return 0  # No matching GPU -> empty (compose falls back to all of /dev/dri).
 }
 
 AMD_VK_DEVICE_SELECT=""; AMD_DRI_PRIME=""; AMD_RENDER_NODE=""
 AMD_RENDER="$(detect_amd_render_gpu)"
 if [ -n "$AMD_RENDER" ]; then
-  # shellcheck disable=SC2086  # フィールドは id/パスで空白を含まない(意図的な分割)
+  # shellcheck disable=SC2086  # Fields are ids/paths with no spaces (intentional split).
   set -- $AMD_RENDER
-  # 末尾 ! は「この1枚だけを列挙する(他GPUを隠す)」指定。無いと並び替えだけになり、
-  # Unity が VRAM 量などのヒューリスティックで別の AMD GPU を選び得る。
+  # The trailing ! means "enumerate only this one (hide other GPUs)". Without it Mesa
+  # only reorders, and Unity may still pick another AMD GPU by VRAM-size heuristics.
   AMD_VK_DEVICE_SELECT="${1}!"             # 1002:7590!
   AMD_DRI_PRIME="$2"                        # pci-0000_c3_00_0
   AMD_RENDER_NODE="$3"                      # /dev/dri/renderD129
 fi
 
-# /dev/dri (GPU) の render/video グループ GID。非rootユーザに group_add する。
+# render/video group GIDs for /dev/dri (GPU). group_add'd onto the non-root user.
 RENDER_GID="$(getent group render | cut -d: -f3)"
 VIDEO_GID="$(getent group video  | cut -d: -f3)"
 [ -n "$RENDER_GID" ] || RENDER_GID="$(stat -c '%g' /dev/dri/renderD128 2>/dev/null || echo 110)"
@@ -175,70 +170,70 @@ VIDEO_GID="$(getent group video  | cut -d: -f3)"
 {
   printf 'HOST_UID=%s\n' "$(id -u)"
   printf 'HOST_GID=%s\n' "$(id -g)"
-  # X11 出力先ディスプレイ(Wayland では Xwayland。SSH からでも検出)
+  # X11 output display (Xwayland on Wayland; detected even over SSH).
   printf 'DISPLAY=%s\n' "$DISPLAY_DETECTED"
-  # X 認証クッキー(FamilyWild 化済み)。compose が /tmp/.Xauthority にマウント。
+  # X auth cookie (rewritten to FamilyWild). compose mounts it at /tmp/.Xauthority.
   printf 'XAUTHORITY_HOST=%s\n' "$XAUTH_FILE"
-  # /dev/dri アクセス用の補助グループ GID
+  # Supplementary group GIDs for /dev/dri access.
   printf 'RENDER_GID=%s\n' "$RENDER_GID"
   printf 'VIDEO_GID=%s\n' "$VIDEO_GID"
-  # 描画に使う GPU(モニタ接続側)。空ならコンテナ側で all にフォールバック。
+  # Rendering GPU (monitor side). Empty -> the container falls back to `all`.
   printf 'NVIDIA_GPU_UUID=%s\n' "$GPU_UUID"
-  # AMD: 描画に使う GPU(モニタ接続側)を1枚に固定するための値。マルチGPU機で
-  # レンダラが表示用でない GPU や BMC 表示チップを掴んで落ちる/動画デコード初期化が
-  # クラッシュするのを防ぐ。compose.amd.yml が参照する:
-  #  - AMD_RENDER_NODE: コンテナに渡す唯一の render ノード(devices で1枚に限定)。
-  #  - AMD_VK_DEVICE_SELECT: Vulkan(Renderite 本体)のデバイス選択(末尾 ! で1枚に固定)。
-  #  - AMD_DRI_PRIME: GL/EGL 経路のデバイス選択。
-  # いずれも空なら単一GPU機とみなし /dev/dri 全体にフォールバック(従来動作)。
+  # AMD: values to pin rendering to the monitor-connected GPU, so on a multi-GPU host
+  # the renderer doesn't grab a non-display GPU or BMC chip (crash / video-decode crash).
+  # Read by compose.amd.yml:
+  #  - AMD_RENDER_NODE: the only render node passed in (devices limited to one GPU).
+  #  - AMD_VK_DEVICE_SELECT: Vulkan (Renderite) device select (trailing ! pins one GPU).
+  #  - AMD_DRI_PRIME: GL/EGL path device select.
+  # All empty -> treated as single-GPU, fall back to all of /dev/dri (legacy behavior).
   printf 'AMD_RENDER_NODE=%s\n' "$AMD_RENDER_NODE"
   printf 'AMD_VK_DEVICE_SELECT=%s\n' "$AMD_VK_DEVICE_SELECT"
   printf 'AMD_DRI_PRIME=%s\n' "$AMD_DRI_PRIME"
-  # bind mount(ro) する Resonite の実体パス
+  # Path to the host's Resonite install (bind-mounted read-only).
   printf 'RESONITE_DIR=%s\n' "$RESONITE_DIR"
 } > .env
 
 echo "generated .env:"
 cat .env
 
-# セッション種別を知らせる。Wayland でも X11 アプリ(Resonite の Wine レンダラ)は
-# Xwayland 経由で描画する。Xwayland が動いていれば $DISPLAY が立ち上で検出できる。
+# Note the session type. On Wayland, X11 apps (the Wine renderer) still draw through
+# Xwayland; if Xwayland is up, $DISPLAY was detected above.
 if [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
-  echo "info: Wayland セッションを検出。X11(Wine レンダラ)は Xwayland 経由で描画します(DISPLAY=$DISPLAY_DETECTED)。"
+  echo "info: Wayland session detected. X11 (the Wine renderer) draws via Xwayland (DISPLAY=$DISPLAY_DETECTED)."
 fi
 
-# X 認証クッキーを用意できなかった場合の警告。空のままだと X に接続できず、
-# ウィンドウが出ないまま無言で終了する(最頻出の起動失敗モード)。
+# Warn if no X auth cookie could be prepared. An empty cookie means no X connection
+# and the process exits silently with no window (the most common launch failure).
 if [ ! -s "$XAUTH_FILE" ]; then
-  echo "warning: X 認証クッキーを用意できませんでした(.xauth が空: $XAUTH_FILE)。" >&2
-  echo "  X ディスプレイ($DISPLAY_DETECTED)に接続できず、無言で終了する場合があります。" >&2
-  echo "  グラフィカルセッション内で実行し、Xorg か Xwayland が動作しているか確認してください。" >&2
-  echo "  Wayland のみで Xwayland が無い環境では X11 アプリは描画できません。" >&2
+  echo "warning: could not prepare an X auth cookie (.xauth is empty: $XAUTH_FILE)." >&2
+  echo "  Cannot connect to the X display ($DISPLAY_DETECTED); may exit silently." >&2
+  echo "  Run inside a graphical session and confirm Xorg or Xwayland is running." >&2
+  echo "  X11 apps cannot render on a Wayland-only host without Xwayland." >&2
 fi
 
 if [ ! -e "$RESONITE_DIR/Resonite.exe" ]; then
-  echo "warning: $RESONITE_DIR/Resonite.exe が見つかりません。" \
-       "RESONITE_DIR=... ./init.sh で場所を指定できます。" >&2
+  echo "warning: $RESONITE_DIR/Resonite.exe not found." \
+       "Set the location with RESONITE_DIR=... ./init.sh" >&2
 fi
 
-# 音声(PulseAudio/PipeWire)ソケットの存在を確認する。compose は
-# /run/user/<uid>/pulse/native を mount し PULSE_SERVER=unix:/tmp/pulse-native で指す。
-# 無い(音声サーバ未起動)と Resonite のエンジンが出力デバイスを開けず、初回オンボーディングの
-# Audio ステップでフリーズすることがある。CMD の -SkipIntroTutorial で回避はしているが、
-# 実際の音声出力にはホスト側で PipeWire(または PulseAudio)が動いている必要がある。
+# Check for the audio (PulseAudio/PipeWire) socket. compose mounts
+# /run/user/<uid>/pulse/native and points PULSE_SERVER=unix:/tmp/pulse-native at it.
+# Without it the engine can't open an output device and may freeze at the first-run
+# onboarding "Audio" step. CMD's -SkipIntroTutorial sidesteps that freeze, but real
+# audio still needs PipeWire (or PulseAudio) running on the host.
 PULSE_SOCK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pulse/native"
 if [ ! -S "$PULSE_SOCK" ]; then
-  echo "warning: PulseAudio/PipeWire ソケットが見つかりません: $PULSE_SOCK" >&2
-  echo "  音声が出ず、初回オンボーディングでフリーズする場合があります。" >&2
-  echo "  ホストで PipeWire(または PulseAudio)が起動しているか確認してください。" >&2
+  echo "warning: PulseAudio/PipeWire socket not found: $PULSE_SOCK" >&2
+  echo "  No audio; may freeze at first-run onboarding." >&2
+  echo "  Confirm PipeWire (or PulseAudio) is running on the host." >&2
 fi
 
-# Steam Linux Runtime(pressure-vessel)は unprivileged user namespace を使う。
-# Ubuntu 24.04 は既定でこれを AppArmor で制限しているので 0 に下げる必要がある。
-# (コンテナ内からは設定できない=ホスト側で設定する)
+# Steam Linux Runtime (pressure-vessel) uses unprivileged user namespaces. Ubuntu 24.04
+# restricts these via AppArmor by default, so it must be lowered to 0. This cannot be
+# set from inside the container — it's a host setting.
 USERNS_KEY=kernel.apparmor_restrict_unprivileged_userns
 if [ "$(sysctl -n "$USERNS_KEY" 2>/dev/null || echo 0)" != "0" ]; then
-  echo "warning: $USERNS_KEY が 0 ではありません。Resonite(pressure-vessel)が起動できません。" >&2
-  echo "  一時的に設定:  sudo sysctl $USERNS_KEY=0" >&2
-  echo "  永続化:        echo '$USERNS_KEY=0' | sudo tee /etc/sysctl.d/99-resonite-userns.conf && sudo sysctl --system" >&2
+  echo "warning: $USERNS_KEY is not 0. Resonite (pressure-vessel) cannot start." >&2
+  echo "  Temporary:  sudo sysctl $USERNS_KEY=0" >&2
+  echo "  Persistent: echo '$USERNS_KEY=0' | sudo tee /etc/sysctl.d/99-resonite-userns.conf && sudo sysctl --system" >&2
 fi

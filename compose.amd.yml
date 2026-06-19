@@ -1,30 +1,29 @@
-# AMD GPU 用オーバーレイ。run.sh が AMD を検出したとき base に重ねる:
+# AMD GPU overlay. Layered on base when run.sh detects AMD:
 #   docker compose -f compose.yaml -f compose.amd.yml up --build
-# AMD は専用 runtime 不要(通常の runc)。GPU アクセスは base の /dev/dri と
-# render/video グループで足り、ユーザ空間ドライバ(Mesa RADV)はイメージに同梱済み。
-# 注: 検証環境は NVIDIA のため AMD 経路は未実機確認(標準的な構成に基づく)。
+# AMD needs no special runtime (plain runc). GPU access is covered by base's /dev/dri
+# and the render/video groups; the user-space driver (Mesa RADV) ships in the image.
 services:
   app:
     build:
       args:
-        GPU: amd             # Mesa(RADV)を同梱してビルド
-    # 描画 GPU(モニタ接続側)の render ノードだけを渡す(値は init.sh が .env に検出)。
-    # マルチGPU機(サーバの BMC 表示チップ ASPEED + dGPU 複数 等)で /dev/dri を丸ごと
-    # 渡すと、レンダラ(Renderite=Unity)の動画デコード初期化(GStreamer/Media Foundation)が
-    # GBM/EGL で全 DRI ノードを列挙し、3D 不可の BMC チップ(driver (null)/kmsro missing)を
-    # 踏んでクラッシュする(UnityCrashHandler 起動 → プロセス群が Killed)。render ノードを
-    # 1枚に絞れば、その GPU しかコンテナに見えず Vulkan も GBM/EGL の列挙もコケない
-    # (NVIDIA を1枚に固定するのと同じ考え方)。検出できない単一GPU機では /dev/dri 全体に
-    # フォールバックする(従来動作)。
+        GPU: amd             # Build with Mesa (RADV) included.
+    # Pass only the rendering GPU's render node (the monitor side; value detected into
+    # .env by init.sh). On a multi-GPU host (e.g. a server's ASPEED BMC chip + several
+    # dGPUs), passing all of /dev/dri makes the renderer's (Renderite=Unity) video-decode
+    # init (GStreamer/Media Foundation) enumerate every DRI node via GBM/EGL and crash on
+    # the non-3D BMC chip (driver (null)/kmsro missing) -> UnityCrashHandler -> Killed.
+    # Limiting to one render node hides every other GPU from the container, so neither
+    # Vulkan nor GBM/EGL enumeration trips (same idea as pinning NVIDIA to one GPU).
+    # On a single-GPU host where nothing is detected, fall back to all of /dev/dri.
     devices:
       - ${AMD_RENDER_NODE:-/dev/dri}:${AMD_RENDER_NODE:-/dev/dri}
     environment:
-      # Vulkan ICD を Mesa RADV に固定(AMDVLK が紛れても挙動を安定させる)。
+      # Pin the Vulkan ICD to Mesa RADV (stable even if AMDVLK is also present).
       AMD_VULKAN_ICD: RADV
-      # 描画 GPU を Mesa のデバイス選択でも明示する(devices で render ノードは既に
-      # 1枚だが、llvmpipe も隠して確実に表示 GPU を使わせる二重の保険):
-      #  - MESA_VK_DEVICE_SELECT=<vendor:device>!  : Vulkan(Renderite 本体)を1枚に固定
-      #  - DRI_PRIME=pci-....                      : GL/EGL 経路を同じ GPU に向ける
-      # 空(検出できない単一GPU機)なら Mesa 既定の列挙にフォールバックする。
+      # Also pin the rendering GPU via Mesa device selection (devices already limits to
+      # one render node, but this hides llvmpipe too and forces the display GPU):
+      #  - MESA_VK_DEVICE_SELECT=<vendor:device>!  : pin Vulkan (Renderite) to one GPU
+      #  - DRI_PRIME=pci-....                      : point the GL/EGL path at the same GPU
+      # Empty (single-GPU host, nothing detected) -> Mesa's default enumeration.
       MESA_VK_DEVICE_SELECT: ${AMD_VK_DEVICE_SELECT:-}
       DRI_PRIME: ${AMD_DRI_PRIME:-}

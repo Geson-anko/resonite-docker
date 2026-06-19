@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# GPU(NVIDIA/AMD)を検出し、適した compose オーバーレイで Resonite を起動する。
-#   ./init.sh          # 先に .env を生成(ホスト UID/GID, DISPLAY, GPU UUID 等)
-#   ./run.sh           # 検出した GPU 用 overlay で docker compose up --build
-#   ./run.sh down      # 追加引数はそのまま docker compose に渡す
+# Detect the GPU (NVIDIA/AMD/Intel) and launch Resonite with the matching overlay.
+#   ./init.sh          # generate .env first (host UID/GID, DISPLAY, GPU UUID, ...)
+#   ./run.sh           # docker compose up --build with the detected GPU overlay
+#   ./run.sh down      # extra args are forwarded to docker compose
 #   ./run.sh logs -f
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# .env が無いと RESONITE_DIR 等のホスト依存値を解決できないので起動しない。
+# Without .env we can't resolve host-specific values (RESONITE_DIR, etc.).
 if [ ! -f .env ]; then
-  echo "error: .env がありません。先に ./init.sh を実行してください。" >&2
+  echo "error: .env is missing. Run ./init.sh first." >&2
   exit 1
 fi
 
-# GPU ベンダーを検出する。
-#  1) NVIDIA は nvidia-container-toolkit(nvidia-smi)かデバイスノードで判定。
-#  2) それ以外は DRM カードの PCI ベンダーID で判定
-#     (0x10de=NVIDIA, 0x1002=AMD, 0x8086=Intel)。
-#     ノートPCの Intel iGPU は card0/card1 のどちらにも来るので card[0-9] を全て見る。
+# Detect the GPU vendor.
+#  1) NVIDIA: via nvidia-container-toolkit (nvidia-smi) or the device node.
+#  2) Otherwise: the DRM card's PCI vendor ID
+#     (0x10de=NVIDIA, 0x1002=AMD, 0x8086=Intel).
+#     A laptop's Intel iGPU may land on card0 or card1, so scan all card[0-9].
 detect_gpu() {
   if command -v nvidia-smi >/dev/null 2>&1 || ls /dev/nvidia0 >/dev/null 2>&1; then
     echo nvidia; return
@@ -40,15 +40,15 @@ case "$GPU" in
   amd)    OVERLAY=compose.amd.yml ;;
   intel)  OVERLAY=compose.intel.yml ;;
   *)
-    echo "error: 対応 GPU(NVIDIA/AMD/Intel)を検出できませんでした。" >&2
-    echo "  /sys/class/drm/card*/device/vendor を確認してください。" >&2
+    echo "error: could not detect a supported GPU (NVIDIA/AMD/Intel)." >&2
+    echo "  Check /sys/class/drm/card*/device/vendor." >&2
     exit 1
     ;;
 esac
 
 echo "detected GPU: $GPU  ->  compose.yaml + $OVERLAY"
 
-# 追加引数があればそのサブコマンドを、無ければ既定で up --build を実行する。
+# Run the given subcommand if args were passed; otherwise default to up --build.
 if [ "$#" -gt 0 ]; then
   exec docker compose -f compose.yaml -f "$OVERLAY" "$@"
 fi

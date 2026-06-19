@@ -1,16 +1,16 @@
 FROM debian:13-slim
 
-# 非rootユーザのUID/GID。X認証クッキー(mode 0700)を読めるようホストに合わせる。
+# UID/GID for the non-root user. Match the host so it can read the X auth cookie (mode 0700).
 ARG HOST_UID=1000
 ARG HOST_GID=1001
 
-# Proton/Wine は 32bit コードを含むので i386 アーキテクチャを有効化。
+# Proton/Wine contains 32-bit code, so enable the i386 architecture.
 RUN dpkg --add-architecture i386
 
-# 基本ツール + X11動作確認用(xeyes) + rsync(インストールをvolumeへ差分同期)。
-# dbus-x11 は dbus-launch を提供する。Steam Linux Runtime の
-# launcher-service がセッションバスを起こすのに必要(無いと
-# "Can't find session bus: ... dbus-launch (No such file or directory)")。
+# Base tools + X11 smoke test (xeyes) + rsync (diff-sync the install into a volume).
+# dbus-x11 provides dbus-launch, which Steam Linux Runtime's launcher-service needs to
+# start a session bus (without it: "Can't find session bus: ... dbus-launch (No such
+# file or directory)").
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -20,19 +20,20 @@ RUN apt-get update \
       x11-apps \
  && rm -rf /var/lib/apt/lists/*
 
-# 描画に使う GPU ベンダー。AMD / Intel のとき Mesa をイメージに同梱する。
-# run.sh が検出し compose.{nvidia,amd,intel}.yml の build arg 経由で渡す(既定 nvidia)。
+# GPU vendor used for rendering. Bundle Mesa in the image for AMD / Intel.
+# run.sh detects it and passes it via the compose.{nvidia,amd,intel}.yml build arg
+# (default nvidia).
 ARG GPU=nvidia
 
-# GPU 描画用のユーザ空間。
-#  - NVIDIA:    実体のドライバ(libGLX_nvidia / Vulkan ICD)は nvidia-container-toolkit が
-#               ホストから注入するので、GLVND/Vulkan のローダ(32/64bit)だけ入れる。
-#               Mesa の Vulkan ICD は入れない(最小・余計なICDで混乱させない)。
-#  - AMD/Intel: ユーザ空間ドライバ(Mesa)は注入されないのでイメージに同梱する。
-#               パッケージは AMD と Intel で共通: mesa-vulkan-drivers は RADV(AMD)と
-#               ANV(Intel)両方の Vulkan ICD を、libgl1-mesa-dri は radeonsi/iris の
-#               GL ドライバを含む。実機の PCI ID に合う ICD だけがデバイスを列挙するので、
-#               Intel 機では ANV、AMD 機では RADV が自動的に選ばれる。
+# GPU rendering user space.
+#  - NVIDIA:    the real driver (libGLX_nvidia / Vulkan ICD) is injected from the host
+#               by nvidia-container-toolkit, so only the GLVND/Vulkan loaders (32/64-bit)
+#               are installed. No Mesa Vulkan ICD (keep it minimal, no confusing extra ICDs).
+#  - AMD/Intel: the user-space driver (Mesa) isn't injected, so bundle it in the image.
+#               The packages are shared between AMD and Intel: mesa-vulkan-drivers ships
+#               both the RADV (AMD) and ANV (Intel) Vulkan ICDs, libgl1-mesa-dri the
+#               radeonsi/iris GL drivers. Only the ICD matching the real PCI ID enumerates
+#               devices, so Intel hosts pick ANV and AMD hosts pick RADV automatically.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libgl1 libgl1:i386 \
@@ -46,20 +47,20 @@ RUN apt-get update \
     fi \
  && rm -rf /var/lib/apt/lists/*
 
-# 音声: ネイティブ Linux 側の PulseAudio クライアント(libpulse)。
-# Resonite は Bootstrapper が Wine を検出するとエンジン本体をネイティブ Linux の .NET で
-# 起動する(Wine で動くのは Renderer の .exe だけ)。そのためエンジンの音声バックエンド
-# (SoundFlow/miniaudio)は Wine ではなく Linux の libpulse を dlopen し、ホストの
-# PipeWire/PulseAudio に繋ぐ。これが無い・繋げないと出力デバイスを開けず、音が出ないうえ
-# 初回オンボーディングの「Audio」ステップでエンジンの Update ループごとハングしてフリーズする。
-# 実体のソケットは compose で mount し PULSE_SERVER で指す。エンジンは x86_64 なので amd64 のみ。
+# Audio: the native-Linux PulseAudio client (libpulse).
+# When the Bootstrapper detects Wine, Resonite runs the engine natively on Linux (.NET);
+# only the renderer .exe runs under Wine. So the engine's audio backend (SoundFlow/miniaudio)
+# dlopens Linux's libpulse, not Wine's, to reach the host's PipeWire/PulseAudio. Without it
+# (or if it can't connect) the engine can't open an output device: no sound, and it hangs
+# the whole update loop at the first-run onboarding "Audio" step. The socket is mounted by
+# compose and pointed at via PULSE_SERVER. The engine is x86_64, so amd64 only.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libpulse0 \
  && rm -rf /var/lib/apt/lists/*
 
-# umu-launcher の latest を GitHub Releases から取得してインストール。
-# Debian 13 用の公式 .deb (amd64 の python3 モジュール + arch:all 本体) を使う。
+# Install the latest umu-launcher from GitHub Releases. Use the official Debian 13 .deb
+# (the amd64 python3 module + the arch:all main package).
 RUN apt-get update \
  && cd /tmp \
  && curl -fsSL https://api.github.com/repos/Open-Wine-Components/umu-launcher/releases/latest \
@@ -68,29 +69,29 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ./*.deb \
  && rm -rf /var/lib/apt/lists/* /tmp/*.deb
 
-# umu-run は root だと実行を拒否するので非rootユーザ(resonite)を作成。
-# パスワードは削除(no-password)。UID/GID はホストに合わせる。
+# umu-run refuses to run as root, so create a non-root user (resonite). No password.
+# UID/GID match the host.
 RUN set -eux; \
     if ! getent group "${HOST_GID}" >/dev/null; then groupadd -g "${HOST_GID}" resonite; fi; \
     useradd -m -u "${HOST_UID}" -g "${HOST_GID}" -s /bin/bash resonite; \
     passwd -d resonite
 
-# machine-id は entrypoint がコンテナ起動毎に生成する(コンテナ固有にするため)。
-# 非rootでも書けるよう、空ファイルを resonite 所有で用意しておく。
+# machine-id is generated per container start by the entrypoint (to make it unique).
+# Pre-create an empty resonite-owned file so the non-root user can write it.
 RUN install -o resonite -g resonite -m 0644 /dev/null /etc/machine-id \
  && mkdir -p /var/lib/dbus \
  && ln -sf /etc/machine-id /var/lib/dbus/machine-id
 
-# 永続化する named volume のマウントポイントを resonite 所有で先に作っておく。
-# Docker は空の named volume を初回マウント時にイメージ側ディレクトリの所有権で
-# 初期化するため、ここで resonite 所有にしておかないと root 所有の volume になり
-# 非rootユーザが書き込めなくなる(初回 rsync / umu 展開が EACCES で失敗する)。
-#   /opt/resonite     : Resonite 本体の書き込み可能コピー(HOME外。理由は entrypoint 参照)
-#   ~/.local/share    : umu/Proton/Steam Linux Runtime + Resonite ユーザデータ(login/設定)
-#   ~/.cache          : Resonite アセットキャッシュ + シェーダキャッシュ
-#   ~/prefix          : Wine プレフィックス(WINEPREFIX)
-# HOME 全体ではなく「再取得が高価/ログイン状態を保ちたい」ものだけを volume にする。
-# machine-id・各種 log・.dbus 等の使い捨て状態はコンテナごとに新規生成させる。
+# Pre-create the named-volume mount points as resonite-owned. Docker initializes an empty
+# named volume with the ownership of the image-side directory on first mount, so without
+# this the volumes would be root-owned and the non-root user couldn't write (first rsync /
+# umu unpack would fail with EACCES).
+#   /opt/resonite     : writable copy of Resonite (outside HOME; see entrypoint for why)
+#   ~/.local/share    : umu/Proton/Steam Linux Runtime + Resonite user data (login/settings)
+#   ~/.cache          : Resonite asset cache + shader cache
+#   ~/prefix          : Wine prefix (WINEPREFIX)
+# Only the "expensive to refetch / keep-me-logged-in" paths are volumes, not all of HOME.
+# Disposable state (machine-id, various logs, .dbus) regenerates per container.
 RUN install -d -o resonite -g resonite \
       /opt/resonite \
       /home/resonite/.local /home/resonite/.local/share \
@@ -103,30 +104,29 @@ USER resonite
 ENV HOME=/home/resonite
 WORKDIR /home/resonite
 
-# umu の設定。WINEPREFIX は ~/prefix、Proton/Steam Linux Runtime は ~/.local/share、
-# アセットは ~/.cache に作られる。これらを named volume にして永続化する(上で作成)。
-# GAMEID=umu-default は umu DB に無いゲーム(=Resonite)向けの汎用ID。
+# umu config. WINEPREFIX is ~/prefix; Proton/Steam Linux Runtime go to ~/.local/share;
+# assets go to ~/.cache. These are named volumes for persistence (created above).
+# GAMEID=umu-default is the generic ID for a game not in umu's DB (i.e. Resonite).
 #
-# PROTONPATH=GE-Proton で Proton を GE-Proton に固定する(umu が GitHub Releases から
-# 最新版を自動取得)。PROTONPATH 未指定だと umu は既定の UMU-Proton(Valve Proton ベース)
-# を使うが、それだと Resonite の起動スプラッシュのロゴテクスチャ描画が壊れ、SMPTE
-# カラーバー+ノイズの「テストカード」状になる。Resonite の Renderer は Proton 上の .exe で
-# 動くため、このロゴ描画は Proton 実装に依存する。GE-Proton はこの描画問題を解消する
-# (Resonite on Linux コミュニティの推奨も Proton-GE)。取得した GE-Proton は umu が
-# ~/.local/share/Steam/compatibilitytools.d に置くので resonite-share volume に永続化され、
-# 2回目以降は再ダウンロードしない。
+# PROTONPATH=GE-Proton pins Proton to GE-Proton (umu auto-fetches the latest from GitHub
+# Releases). With PROTONPATH unset, umu uses the default UMU-Proton (Valve Proton based),
+# but that breaks the startup-splash logo texture into an SMPTE-color-bars "test card".
+# Resonite's renderer runs as a .exe under Proton, so this splash rendering depends on the
+# Proton build; GE-Proton fixes it (also the Resonite-on-Linux community recommendation).
+# The fetched GE-Proton lands in ~/.local/share/Steam/compatibilitytools.d, persisted in
+# the resonite-share volume, so it isn't re-downloaded on later runs.
 ENV GAMEID=umu-default \
     WINEPREFIX=/home/resonite/prefix \
     PROTONPATH=GE-Proton
 
-# entrypoint で machine-id 生成 + /resonite へ cd してから CMD を exec。
+# entrypoint generates machine-id + cds into the install copy, then execs CMD.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
-# 既定で Resonite を起動(entrypoint が volume へ同期したコピーを実行)。
-# 初回は Proton/runtime のDL + インストールのコピーで時間がかかる。
+# Launch Resonite by default (entrypoint runs the copy synced into the volume).
+# First run is slow (downloads Proton/runtime + copies the install).
 #
-# -SkipIntroTutorial: 初回オンボーディング(言語/音声/…のチュートリアル)を出さずに
-#   そのままダッシュへ入る。コンテナ運用では毎回の初回ウィザードが不要なため省く。
-#   音声依存の「Audio」ステップでのフリーズは上の libpulse で解消済みで、これはその保険
-#   兼 UX 改善。チュートリアルを通常どおり見たい場合はこの引数を外す。
+# -SkipIntroTutorial: skip the first-run onboarding (language/audio/... tutorial) and go
+#   straight to the dashboard. The first-run wizard isn't useful for container runs. The
+#   freeze at the audio-dependent "Audio" step is already fixed by libpulse above; this is
+#   insurance plus a UX improvement. Drop this arg to see the tutorial normally.
 CMD ["umu-run", "/opt/resonite/Resonite.exe", "-SkipIntroTutorial"]

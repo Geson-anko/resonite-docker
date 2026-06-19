@@ -17,7 +17,7 @@ GitHub workflow conventions for this repository.
 
 - Branch from `main` with a descriptive name: `feat/`, `fix/`, `docs/`, `refactor/`.
 - PR title follows Conventional Commits. Keep PRs focused — one logical change.
-- In the description, state what changed, why, and **how it was verified** — include the GPU vendor tested on (NVIDIA vs AMD) since the AMD path is unverified on real hardware.
+- In the description, state what changed, why, and **how it was verified** — include the GPU vendor tested on (NVIDIA / AMD / Intel).
 - Never commit `.env` (it's gitignored and host-specific).
 
 ## Issues
