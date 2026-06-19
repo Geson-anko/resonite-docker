@@ -106,8 +106,18 @@ WORKDIR /home/resonite
 # umu の設定。WINEPREFIX は ~/prefix、Proton/Steam Linux Runtime は ~/.local/share、
 # アセットは ~/.cache に作られる。これらを named volume にして永続化する(上で作成)。
 # GAMEID=umu-default は umu DB に無いゲーム(=Resonite)向けの汎用ID。
+#
+# PROTONPATH=GE-Proton で Proton を GE-Proton に固定する(umu が GitHub Releases から
+# 最新版を自動取得)。PROTONPATH 未指定だと umu は既定の UMU-Proton(Valve Proton ベース)
+# を使うが、それだと Resonite の起動スプラッシュのロゴテクスチャ描画が壊れ、SMPTE
+# カラーバー+ノイズの「テストカード」状になる。Resonite の Renderer は Proton 上の .exe で
+# 動くため、このロゴ描画は Proton 実装に依存する。GE-Proton はこの描画問題を解消する
+# (Resonite on Linux コミュニティの推奨も Proton-GE)。取得した GE-Proton は umu が
+# ~/.local/share/Steam/compatibilitytools.d に置くので resonite-share volume に永続化され、
+# 2回目以降は再ダウンロードしない。
 ENV GAMEID=umu-default \
-    WINEPREFIX=/home/resonite/prefix
+    WINEPREFIX=/home/resonite/prefix \
+    PROTONPATH=GE-Proton
 
 # entrypoint で machine-id 生成 + /resonite へ cd してから CMD を exec。
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

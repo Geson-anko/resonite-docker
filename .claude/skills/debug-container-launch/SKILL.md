@@ -27,6 +27,8 @@ Most failures here are host-integration issues, not Resonite bugs. Start with `.
 
 - **Paths like `/dev/shm` resolve to the wrong Wine drive** — the writable install must stay **outside `$HOME`** (`/opt/resonite`). Inside `$HOME` (itself a mount), umu makes the parent the `S:` gamedrive and absolute paths misresolve. Don't move it under `$HOME`.
 
+- **Startup splash logo renders as corrupted color bars / test-card (SMPTE bars + noise)** — the Resonite logo texture mis-renders under the default Proton. The Renderer is a `.exe` running under Proton, so the splash rendering depends on the Proton build. umu defaults to UMU-Proton (Valve-based) when `PROTONPATH` is unset, which has this bug; GE-Proton fixes it (the Resonite-on-Linux community's recommended variant). Fix: `PROTONPATH=GE-Proton` in the `Dockerfile` so umu auto-downloads GE-Proton (cached in the `resonite-share` volume under `~/.local/share/Steam/compatibilitytools.d`). Avoid Proton 11 / Experimental / any 11-based build — those won't launch Resonite at all.
+
 ## Notes
 
 - The AMD overlay is **unverified on real hardware**; treat AMD-only failures as suspect-the-config first.
