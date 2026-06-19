@@ -48,6 +48,7 @@ RESONITE_DIR=/path/to/Resonite ./init.sh
 
 - `compose.nvidia.yml` — `runtime: nvidia`(toolkit がホストのドライバを注入)、`NVIDIA_VISIBLE_DEVICES`/`NVIDIA_DRIVER_CAPABILITIES` を設定。イメージ内の Mesa は使われない。
 - `compose.amd.yml` — 通常の `runc`。GPU アクセスはベースの `/dev/dri` + グループで足り、Mesa/RADV のユーザ空間ドライバはイメージに同梱(`GPU=amd` ビルド arg)。**AMD 経路は実機未検証**(開発環境は NVIDIA)。
+- `compose.intel.yml` — Intel iGPU 用。AMD と同様に通常の `runc` + ベースの `/dev/dri` で動き、Mesa(GL=iris / Vulkan=ANV)を同梱(`GPU=intel` ビルド arg)。Mesa パッケージは AMD と共通で、実機が Intel のみなら ANV だけがデバイスを列挙するため ICD 固定は不要。**iGPU は重い**(起動・最低限の描画は可能)。**Intel 経路は実機未検証**。
 
 ### Resonite の実際の動き方(最重要のメンタルモデル)
 

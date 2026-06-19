@@ -1,0 +1,17 @@
+# Intel GPU(iGPU)用オーバーレイ。run.sh が Intel を検出したとき base に重ねる:
+#   docker compose -f compose.yaml -f compose.intel.yml up --build
+# Intel iGPU は AMD と同じく専用 runtime 不要(通常の runc)。GPU アクセスは base の
+# /dev/dri と render/video グループで足り、ユーザ空間ドライバ(Mesa: GL=iris,
+# Vulkan=ANV)はイメージに同梱済み(GPU=intel ビルド arg)。
+#
+# Vulkan ICD の固定は不要: mesa-vulkan-drivers は RADV(AMD)/ANV(Intel)両方の ICD を
+# 入れるが、実機が Intel のみなら RADV はデバイスを列挙せず ANV だけが見えるため、
+# ローダが自動的に Intel を選ぶ(AMD overlay の AMD_VULKAN_ICD のような固定は要らない)。
+#
+# 注: iGPU は VRAM/帯域が限られるため Resonite の動作は重い(起動・最低限の描画は可能)。
+# 注: 検証環境は NVIDIA のため Intel 経路は未実機確認(標準的な Mesa 構成に基づく)。
+services:
+  app:
+    build:
+      args:
+        GPU: intel           # Mesa(iris/ANV)を同梱してビルド

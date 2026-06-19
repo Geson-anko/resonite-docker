@@ -20,22 +20,25 @@ RUN apt-get update \
       x11-apps \
  && rm -rf /var/lib/apt/lists/*
 
-# 描画に使う GPU ベンダー。AMD のときだけ Mesa をイメージに同梱する。
-# run.sh が検出し compose.{nvidia,amd}.yml の build arg 経由で渡す(既定 nvidia)。
+# 描画に使う GPU ベンダー。AMD / Intel のとき Mesa をイメージに同梱する。
+# run.sh が検出し compose.{nvidia,amd,intel}.yml の build arg 経由で渡す(既定 nvidia)。
 ARG GPU=nvidia
 
 # GPU 描画用のユーザ空間。
-#  - NVIDIA: 実体のドライバ(libGLX_nvidia / Vulkan ICD)は nvidia-container-toolkit が
-#            ホストから注入するので、GLVND/Vulkan のローダ(32/64bit)だけ入れる。
-#            Mesa の Vulkan ICD は入れない(最小・余計なICDで混乱させない)。
-#  - AMD:    ユーザ空間ドライバ(Mesa)は注入されないのでイメージに同梱する
-#            (libglx-mesa0/libgl1-mesa-dri=GL、mesa-vulkan-drivers=Vulkan/RADV)。
+#  - NVIDIA:    実体のドライバ(libGLX_nvidia / Vulkan ICD)は nvidia-container-toolkit が
+#               ホストから注入するので、GLVND/Vulkan のローダ(32/64bit)だけ入れる。
+#               Mesa の Vulkan ICD は入れない(最小・余計なICDで混乱させない)。
+#  - AMD/Intel: ユーザ空間ドライバ(Mesa)は注入されないのでイメージに同梱する。
+#               パッケージは AMD と Intel で共通: mesa-vulkan-drivers は RADV(AMD)と
+#               ANV(Intel)両方の Vulkan ICD を、libgl1-mesa-dri は radeonsi/iris の
+#               GL ドライバを含む。実機の PCI ID に合う ICD だけがデバイスを列挙するので、
+#               Intel 機では ANV、AMD 機では RADV が自動的に選ばれる。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libgl1 libgl1:i386 \
       libvulkan1 libvulkan1:i386 \
       vulkan-tools \
- && if [ "$GPU" = "amd" ]; then \
+ && if [ "$GPU" = "amd" ] || [ "$GPU" = "intel" ]; then \
       apt-get install -y --no-install-recommends \
         libglx-mesa0 libglx-mesa0:i386 \
         libgl1-mesa-dri libgl1-mesa-dri:i386 \

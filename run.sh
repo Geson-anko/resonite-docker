@@ -15,7 +15,9 @@ fi
 
 # GPU ベンダーを検出する。
 #  1) NVIDIA は nvidia-container-toolkit(nvidia-smi)かデバイスノードで判定。
-#  2) それ以外は DRM カードの PCI ベンダーID で判定(0x10de=NVIDIA, 0x1002=AMD)。
+#  2) それ以外は DRM カードの PCI ベンダーID で判定
+#     (0x10de=NVIDIA, 0x1002=AMD, 0x8086=Intel)。
+#     ノートPCの Intel iGPU は card0/card1 のどちらにも来るので card[0-9] を全て見る。
 detect_gpu() {
   if command -v nvidia-smi >/dev/null 2>&1 || ls /dev/nvidia0 >/dev/null 2>&1; then
     echo nvidia; return
@@ -26,6 +28,7 @@ detect_gpu() {
     case "$(cat "$v")" in
       0x10de) echo nvidia; return ;;
       0x1002) echo amd;    return ;;
+      0x8086) echo intel;  return ;;
     esac
   done
   echo unknown
@@ -35,8 +38,9 @@ GPU="$(detect_gpu)"
 case "$GPU" in
   nvidia) OVERLAY=compose.nvidia.yml ;;
   amd)    OVERLAY=compose.amd.yml ;;
+  intel)  OVERLAY=compose.intel.yml ;;
   *)
-    echo "error: 対応 GPU(NVIDIA/AMD)を検出できませんでした。" >&2
+    echo "error: 対応 GPU(NVIDIA/AMD/Intel)を検出できませんでした。" >&2
     echo "  /sys/class/drm/card*/device/vendor を確認してください。" >&2
     exit 1
     ;;
