@@ -7,6 +7,10 @@ services:
     build:
       args:
         GPU: nvidia          # Mesa を入れない最小イメージでビルド
+    # GPU は toolkit が注入するが、X への DRI3 present 用に /dev/dri も渡す
+    # (devices を overlay 側で指定する理由は compose.yaml のコメント参照)。
+    devices:
+      - /dev/dri:/dev/dri
     # ホストと同一バージョンの NVIDIA ドライバを toolkit が注入する。
     runtime: nvidia
     environment:

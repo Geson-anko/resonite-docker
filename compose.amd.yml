@@ -8,6 +8,23 @@ services:
     build:
       args:
         GPU: amd             # Mesa(RADV)を同梱してビルド
+    # 描画 GPU(モニタ接続側)の render ノードだけを渡す(値は init.sh が .env に検出)。
+    # マルチGPU機(サーバの BMC 表示チップ ASPEED + dGPU 複数 等)で /dev/dri を丸ごと
+    # 渡すと、レンダラ(Renderite=Unity)の動画デコード初期化(GStreamer/Media Foundation)が
+    # GBM/EGL で全 DRI ノードを列挙し、3D 不可の BMC チップ(driver (null)/kmsro missing)を
+    # 踏んでクラッシュする(UnityCrashHandler 起動 → プロセス群が Killed)。render ノードを
+    # 1枚に絞れば、その GPU しかコンテナに見えず Vulkan も GBM/EGL の列挙もコケない
+    # (NVIDIA を1枚に固定するのと同じ考え方)。検出できない単一GPU機では /dev/dri 全体に
+    # フォールバックする(従来動作)。
+    devices:
+      - ${AMD_RENDER_NODE:-/dev/dri}:${AMD_RENDER_NODE:-/dev/dri}
     environment:
       # Vulkan ICD を Mesa RADV に固定(AMDVLK が紛れても挙動を安定させる)。
       AMD_VULKAN_ICD: RADV
+      # 描画 GPU を Mesa のデバイス選択でも明示する(devices で render ノードは既に
+      # 1枚だが、llvmpipe も隠して確実に表示 GPU を使わせる二重の保険):
+      #  - MESA_VK_DEVICE_SELECT=<vendor:device>!  : Vulkan(Renderite 本体)を1枚に固定
+      #  - DRI_PRIME=pci-....                      : GL/EGL 経路を同じ GPU に向ける
+      # 空(検出できない単一GPU機)なら Mesa 既定の列挙にフォールバックする。
+      MESA_VK_DEVICE_SELECT: ${AMD_VK_DEVICE_SELECT:-}
+      DRI_PRIME: ${AMD_DRI_PRIME:-}

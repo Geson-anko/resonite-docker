@@ -36,10 +36,16 @@ services:
     # Docker 既定の 64MB 不足(Bootstrapper messaging timeout)も同時に回避できる。
     # ※ ipc: host とは shm_size を併用できないため shm_size は指定しない。
     ipc: host
-    # GPU(描画)を渡す。NVIDIA のデバイスは toolkit が注入するが、X への
-    # DRI3 present 用に /dev/dri も渡す。AMD は Mesa がこの /dev/dri を直接使う。
-    devices:
-      - /dev/dri:/dev/dri
+    # GPU デバイス(/dev/dri)の渡し方は GPU ベンダーで異なるので overlay 側で指定する:
+    #  - NVIDIA: ドライバは toolkit が注入。X への DRI3 present 用に /dev/dri を丸ごと渡す。
+    #  - Intel:  iGPU 1枚。/dev/dri を丸ごと渡し Mesa(iris/ANV)が直接使う。
+    #  - AMD:    マルチGPU機(サーバの BMC 表示チップ ASPEED + dGPU 複数 等)では
+    #            /dev/dri を丸ごと渡すと、レンダラの動画デコード初期化(GStreamer/
+    #            Media Foundation)が GBM/EGL で全 DRI ノードを列挙し、3D 不可の BMC
+    #            チップ(driver (null))を踏んでクラッシュする。そこで描画 GPU
+    #            (モニタ接続側)の render ノードだけを渡す(init.sh が AMD_RENDER_NODE に検出)。
+    # ※ devices を base に置かないのは、compose のリストが「追記」マージで base から
+    #    消せず、AMD overlay 側で /dev/dri 全体を除外できないため(各 overlay で個別指定)。
     # /dev/dri の render/video グループに非rootユーザを参加させる(.env に GID 記録)。
     group_add:
       - "${RENDER_GID:-110}"
