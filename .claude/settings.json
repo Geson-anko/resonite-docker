@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./init.sh)",
+      "Bash(./run.sh:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker logs:*)",
+      "Bash(bash -n:*)",
+      "Bash(shellcheck:*)",
+      "Bash(shfmt:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git status)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": ["Read(./.env)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      { "matcher": "Edit|Write|MultiEdit",
+        "hooks": [ { "type": "command", "command": ".claude/hooks/format.sh" } ] }
+    ]
+  }
+}
