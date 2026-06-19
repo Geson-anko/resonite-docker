@@ -15,3 +15,7 @@ services:
     build:
       args:
         GPU: intel           # Mesa(iris/ANV)を同梱してビルド
+    # iGPU 1枚の構成なので /dev/dri を丸ごと渡す(devices を overlay 側で指定する
+    # 理由は compose.yaml のコメント参照)。
+    devices:
+      - /dev/dri:/dev/dri

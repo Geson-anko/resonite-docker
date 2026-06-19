@@ -119,6 +119,53 @@ detect_display_gpu() {
 
 GPU_UUID="$(detect_display_gpu)"
 
+# AMD: 描画に使う GPU(モニタが接続されている方)を特定し、その render ノードと
+# Mesa デバイス選択を .env に出力する。マルチGPU機(例: サーバの BMC 表示チップ
+# ASPEED + dGPU 複数)で /dev/dri を丸ごとコンテナに渡すと、二段で問題が起きる:
+#  1) レンダラ(Renderite=Unity/Vulkan)が表示用でない GPU(演算用 dGPU)を掴み、
+#     描画 GPU と present 先が食い違って落ちる。
+#  2) レンダラの動画デコード初期化(GStreamer/Media Foundation)が GBM/EGL で全 DRI
+#     ノードを列挙し、3D 不可の BMC 表示チップ(ast。driver (null)/kmsro missing)を
+#     踏んでクラッシュする(UnityCrashHandler 起動 → プロセス群が Killed)。
+# 対策は NVIDIA を NVIDIA_GPU_UUID で1枚に固定するのと同じ「表示 GPU だけを見せる」:
+#  - その GPU の render ノードだけを渡す(AMD_RENDER_NODE。compose.amd.yml が device 指定)
+#    → 他 GPU/BMC が /dev/dri に現れず、Vulkan も GBM/EGL の列挙も踏まない。
+#  - 念のため Mesa 選択も渡す(AMD_VK_DEVICE_SELECT=Vulkan, AMD_DRI_PRIME=GL/EGL)。
+# モニタが繋がった amdgpu カードを1枚特定する(BMC の Virtual/仮想 Writeback は除外)。
+# 出力: "<vendor>:<device> <pci-tag> <render-node>"
+#   例 "1002:7590 pci-0000_c3_00_0 /dev/dri/renderD129"(特定できなければ空)。
+detect_amd_render_gpu() {
+  local s con card drv vendor device pci tag rnode
+  for s in /sys/class/drm/card*-*/status; do
+    [ "$(cat "$s" 2>/dev/null)" = connected ] || continue
+    con="$(basename "$(dirname "$s")")"                 # 例: card2-DP-5
+    case "$con" in *-Virtual-*|*-Writeback-*) continue ;; esac
+    card="${con%%-*}"                                   # card2
+    drv="$(basename "$(readlink -f "/sys/class/drm/$card/device/driver" 2>/dev/null)" 2>/dev/null)"
+    [ "$drv" = amdgpu ] || continue
+    vendor="$(cat "/sys/class/drm/$card/device/vendor" 2>/dev/null)"; vendor="${vendor#0x}"
+    device="$(cat "/sys/class/drm/$card/device/device" 2>/dev/null)"; device="${device#0x}"
+    pci="$(basename "$(readlink -f "/sys/class/drm/$card/device" 2>/dev/null)")"  # 0000:c3:00.0
+    tag="pci-$(printf '%s' "$pci" | tr ':.' '_')"       # pci-0000_c3_00_0
+    rnode="$(readlink -f "/dev/dri/by-path/pci-${pci}-render" 2>/dev/null)"  # /dev/dri/renderD129
+    [ -n "$vendor" ] && [ -n "$device" ] && [ -n "$rnode" ] \
+      && { printf '%s:%s %s %s' "$vendor" "$device" "$tag" "$rnode"; return 0; }
+  done
+  return 0  # 該当GPU無し -> 空(compose 側で /dev/dri 全体にフォールバック)
+}
+
+AMD_VK_DEVICE_SELECT=""; AMD_DRI_PRIME=""; AMD_RENDER_NODE=""
+AMD_RENDER="$(detect_amd_render_gpu)"
+if [ -n "$AMD_RENDER" ]; then
+  # shellcheck disable=SC2086  # フィールドは id/パスで空白を含まない(意図的な分割)
+  set -- $AMD_RENDER
+  # 末尾 ! は「この1枚だけを列挙する(他GPUを隠す)」指定。無いと並び替えだけになり、
+  # Unity が VRAM 量などのヒューリスティックで別の AMD GPU を選び得る。
+  AMD_VK_DEVICE_SELECT="${1}!"             # 1002:7590!
+  AMD_DRI_PRIME="$2"                        # pci-0000_c3_00_0
+  AMD_RENDER_NODE="$3"                      # /dev/dri/renderD129
+fi
+
 # /dev/dri (GPU) の render/video グループ GID。非rootユーザに group_add する。
 RENDER_GID="$(getent group render | cut -d: -f3)"
 VIDEO_GID="$(getent group video  | cut -d: -f3)"
@@ -137,6 +184,16 @@ VIDEO_GID="$(getent group video  | cut -d: -f3)"
   printf 'VIDEO_GID=%s\n' "$VIDEO_GID"
   # 描画に使う GPU(モニタ接続側)。空ならコンテナ側で all にフォールバック。
   printf 'NVIDIA_GPU_UUID=%s\n' "$GPU_UUID"
+  # AMD: 描画に使う GPU(モニタ接続側)を1枚に固定するための値。マルチGPU機で
+  # レンダラが表示用でない GPU や BMC 表示チップを掴んで落ちる/動画デコード初期化が
+  # クラッシュするのを防ぐ。compose.amd.yml が参照する:
+  #  - AMD_RENDER_NODE: コンテナに渡す唯一の render ノード(devices で1枚に限定)。
+  #  - AMD_VK_DEVICE_SELECT: Vulkan(Renderite 本体)のデバイス選択(末尾 ! で1枚に固定)。
+  #  - AMD_DRI_PRIME: GL/EGL 経路のデバイス選択。
+  # いずれも空なら単一GPU機とみなし /dev/dri 全体にフォールバック(従来動作)。
+  printf 'AMD_RENDER_NODE=%s\n' "$AMD_RENDER_NODE"
+  printf 'AMD_VK_DEVICE_SELECT=%s\n' "$AMD_VK_DEVICE_SELECT"
+  printf 'AMD_DRI_PRIME=%s\n' "$AMD_DRI_PRIME"
   # bind mount(ro) する Resonite の実体パス
   printf 'RESONITE_DIR=%s\n' "$RESONITE_DIR"
 } > .env
