@@ -17,7 +17,9 @@ Most failures here are host-integration issues, not Resonite bugs. Start with `.
 
 - **`Can't find session bus` / `dbus-launch: No such file`** — Steam Linux Runtime's launcher needs a session bus. Fix: `dbus-x11` must be installed in the image.
 
-- **Black window / no display / `cannot open display`** — check `.env` `DISPLAY` (over SSH it's auto-detected from `who`/sockets), the `/tmp/.X11-unix` and `Xauthority` mounts, and that `XAUTHORITY=/tmp/.Xauthority` matches the host's live cookie path.
+- **Black window / no display / `cannot open display` / exits silently with no window** — X auth or display targeting is wrong. `init.sh` writes `DISPLAY` and `XAUTHORITY_HOST` to `.env`; the latter points at a generated `.xauth` whose cookie is rewritten to **FamilyWild (`ffff`)** so it authenticates despite the container's random hostname. Check: `.env` `XAUTHORITY_HOST` exists and `.xauth` is non-empty (`xauth -f .xauth list`), `compose.yaml` mounts `${XAUTHORITY_HOST}:/tmp/.Xauthority` (not the old hardcoded `gdm/Xauthority` path), `DISPLAY` points at a **user-owned** X socket, and `/tmp/.X11-unix` is mounted. Re-run `./init.sh` — the cookie path/name is session-specific and changes on re-login.
+
+- **Wayland host (`XDG_SESSION_TYPE=wayland`)** — rendering still goes through **X11 via Xwayland**, not native Wayland (the renderer is a Proton/Wine `.exe`). Xwayland must be running so a `DISPLAY` (e.g. `:1`) and `/tmp/.X11-unix/X*` socket exist; `init.sh` prefers the socket owned by the current user (the display manager's root-owned `:0` greeter socket has no usable cookie). The old code hardcoded a gdm Xorg cookie path that doesn't exist under KDE/SDDM or Wayland — that was the silent-exit cause this setup fixes.
 
 - **Pressure-vessel / namespace errors at startup** — host `kernel.apparmor_restrict_unprivileged_userns` must be `0`, and the service needs `seccomp=unconfined` + `apparmor=unconfined`. `init.sh` warns when the sysctl is wrong.
 

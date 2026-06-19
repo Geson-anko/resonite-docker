@@ -9,7 +9,7 @@ This skill guides launching and operating the containerized Resonite.
 
 ## Host Prerequisites
 
-- A running X11 desktop session (the container renders to it; Wayland-only sessions need Xwayland).
+- A graphical session the container can render into. Rendering is always over **X11**; on a **Wayland** session it goes through **Xwayland** (must be running, so a `DISPLAY` + `/tmp/.X11-unix/X*` socket exist). `init.sh` finds the user-owned X socket and generates a hostname-independent auth cookie — no native-Wayland setup is needed or attempted.
 - Docker + Docker Compose, and for NVIDIA the `nvidia-container-toolkit`.
 - A running **PulseAudio/PipeWire** socket at `/run/user/<uid>/pulse/native` — without it Resonite's engine hangs at the audio onboarding step.
 - `kernel.apparmor_restrict_unprivileged_userns=0` on the host (Ubuntu 24.04+ defaults it on, which blocks Steam Linux Runtime's pressure-vessel):
@@ -21,7 +21,7 @@ This skill guides launching and operating the containerized Resonite.
 ## Launch
 
 ```bash
-./init.sh        # probe host → write .env (UID/GID, DISPLAY, GPU UUID, render/video GIDs, RESONITE_DIR)
+./init.sh        # probe host → write .env (UID/GID, DISPLAY, XAUTHORITY_HOST, GPU UUID, render/video GIDs, RESONITE_DIR) + generate .xauth
 ./run.sh         # detect GPU → docker compose up --build with the right overlay
 ```
 
