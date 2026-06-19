@@ -45,10 +45,15 @@ services:
       - "${RENDER_GID:-110}"
       - "${VIDEO_GID:-44}"
     volumes:
-      # X11 の Unix ソケット
+      # X11 の Unix ソケット。Wayland セッションでは Xwayland がここにソケットを
+      # 出すので、Resonite の Wine レンダラは Xwayland 経由で描画できる。
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
-      # 稼働中の Xorg が実際に使っている認証クッキー(gdm)。
-      - /run/user/${HOST_UID:-1000}/gdm/Xauthority:/tmp/.Xauthority:ro
+      # X 認証クッキー。init.sh が現在の DISPLAY のクッキーを FamilyWild 化して
+      # .xauth に生成し、そのパスを .env の XAUTHORITY_HOST に書く。ホスト名に依存
+      # しないのでコンテナ(ランダムなホスト名)からでも認証が通る。デスクトップ毎に
+      # クッキーの実体パスが違う(gdm/KDE/Wayland 等)問題を init.sh 側で吸収する。
+      # 既定の /dev/null は「init.sh 未実行」時に phantom ディレクトリを作らせない保険。
+      - ${XAUTHORITY_HOST:-/dev/null}:/tmp/.Xauthority:ro
       # ホストの PulseAudio/PipeWire の Unix ソケット(音声出力先)。PipeWire 環境では
       # pipewire-pulse が /run/user/<uid>/pulse/native を提供する。PULSE_SERVER がこれを指す。
       # ソケットへの connect は書き込み権限が要るので :ro は付けない。

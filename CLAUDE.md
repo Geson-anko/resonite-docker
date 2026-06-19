@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## プロジェクト概要
 
-このリポジトリは [Resonite](https://resonite.com/)(VR ソーシャルプラットフォーム)を Linux 上の Docker で動かし、**ホストの X11 デスクトップへ描画**しながら、GPU(NVIDIA / AMD)アクセラレーションとホスト音声を使えるようにする構成一式である。コンテナは Resonite 本体を同梱しない — ホストの Steam 版インストールを read-only で bind mount し、[`umu-launcher`](https://github.com/Open-Wine-Components/umu-launcher)(Proton/Wine)経由で起動する。
+このリポジトリは [Resonite](https://resonite.com/)(VR ソーシャルプラットフォーム)を Linux 上の Docker で動かし、**ホストのデスクトップ(X11 / Wayland)へ描画**しながら、GPU(NVIDIA / AMD)アクセラレーションとホスト音声を使えるようにする構成一式である。コンテナは Resonite 本体を同梱しない — ホストの Steam 版インストールを read-only で bind mount し、[`umu-launcher`](https://github.com/Open-Wine-Components/umu-launcher)(Proton/Wine)経由で起動する。
+
+描画は常に **X11 経由**である。Resonite のレンダラは Proton/Wine の `.exe`(X11 アプリ)なので、Wayland セッションでも **Xwayland** を介して描画する(コンポジタが提供する X11 互換レイヤ)。つまり「Wayland 対応」とは「Xwayland のディスプレイへ正しく接続する」ことであり、ネイティブ Wayland レンダリングは行わない。
 
 アプリのソースコードは無く、リポジトリの中身はシェルスクリプト数本・`Dockerfile`・Docker Compose ファイルだけである。難所はホスト統合(X11・GPU・音声・共有メモリ IPC・user namespace)で、非自明な判断のほぼ全てがインラインコメントに書かれている。**設定を変える前に、必ずその設定の隣のコメントを読むこと。**
 
@@ -34,7 +36,8 @@ RESONITE_DIR=/path/to/Resonite ./init.sh
 `init.sh` は**ホスト側**で実行し、マシンごとに異なる値を全て検出して `.env` に書き出す:
 
 - ホストの `UID`/`GID` — コンテナの非 root ユーザ `resonite` をこれに合わせて作り、named volume 上のファイルや X 認証クッキーを読み書きできるようにする。
-- `DISPLAY` — SSH 接続で `$DISPLAY` が空のときは `who` / `/tmp/.X11-unix` から拾う。
+- `DISPLAY` — SSH 接続で `$DISPLAY` が空のときは `who` / `/tmp/.X11-unix` から拾う。Wayland では Xwayland のソケット(`:1` 等)を指す。複数ソケットがある場合は**自分が所有する**ソケットを優先し、root 所有のグリーター用(`:0` 等)を避ける。
+- `XAUTHORITY_HOST` — X 認証クッキーを **FamilyWild(`ffff`=任意ホスト一致)に書き換えた `.xauth`** を生成して指す。コンテナのホスト名はランダムなコンテナID なので、ホストのクッキーをそのまま渡すと認証が一致せず**ウィンドウが出ないまま無言終了**する。取得元(gdm/KDE/Wayland でパスが違う Xauthority)も順に探索して吸収する。`.xauth` はセッション固有なので gitignore 対象。
 - `NVIDIA_GPU_UUID` — モニタが実際につながっている GPU の UUID(マルチ GPU で重要。PRIME コピーを避ける)。
 - `RENDER_GID` / `VIDEO_GID` — ホストの `/dev/dri` の GID。`group_add` でコンテナユーザに付与する。
 
